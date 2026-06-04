@@ -108,6 +108,7 @@ También con Web UI: `localhost:3000` → arrastrar PDF/DOCX → preguntar en el
 | F5 | Citas exactas | ✅ `[archivo, pag. N]` inline (página REAL para PDFs vía PyMuPDF/pdf-parse) |
 | F6 | Modo conservador | ✅ "no encontré eso en tus fuentes" |
 | F7 | Modo crítico | ✅ "Observación crítica" detecta debilidades |
+| **F7+** | **LLM Council** (3 jueces) | ✅ Tras cada respuesta, un panel de **Claude + GPT-4o + Llama 3.3** valida fundamentación en paralelo. Badge con veredicto + problemas detectados. |
 | F8 | Gestión de documentos | ✅ ls + rm + UI con drag&drop |
 | F9 | Concepto de proyecto/tema | ✅ selector en sidebar, `--proyecto` en CLI |
 
