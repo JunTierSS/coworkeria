@@ -96,7 +96,7 @@ También con Web UI: `localhost:3000` → arrastrar PDF/DOCX → preguntar en el
 | F2 | Procesamiento automático | ✅ chunking + embeddings (OpenAI) + store |
 | F3 | Chat sobre el conocimiento | ✅ Claude Sonnet 4 |
 | F4 | Búsqueda semántica | ✅ Chroma query con filtro por proyecto |
-| F5 | Citas exactas | ✅ `[archivo, pag. N]` inline |
+| F5 | Citas exactas | ✅ `[archivo, pag. N]` inline (página REAL para PDFs vía PyMuPDF/pdf-parse) |
 | F6 | Modo conservador | ✅ "no encontré eso en tus fuentes" |
 | F7 | Modo crítico | ✅ "Observación crítica" detecta debilidades |
 | F8 | Gestión de documentos | ✅ ls + rm + UI con drag&drop |
@@ -122,7 +122,7 @@ cp .env.example .env
 # editar .env y poner OPENROUTER_API_KEY
 
 # Instalar deps Python
-pip install chromadb reportlab python-docx
+pip install chromadb reportlab python-docx pymupdf
 
 # Instalar deps UI
 cd ui && npm install && cd ..
@@ -167,11 +167,12 @@ npm run dev
 
 UI de n8n → menú **⋮** arriba a la derecha → **Import from File**:
 
-- `n8n/workflows/ingesta_pdf.json`
-- `n8n/workflows/ingesta_texto.json`
+- `n8n/workflows/ingesta_texto.json` (acepta tanto texto plano como chunks pre-procesados; usado por la ingesta de PDF y DOCX desde el CLI/UI)
 - `n8n/workflows/consulta_rag.json`
 
 Activarlos con el toggle.
+
+> **Diseño:** la extracción de PDF/DOCX se hace **en el cliente** (CLI con PyMuPDF, UI con pdf-parse/mammoth), no en n8n. Esto permite chunkear por página y guardar el número de página **real** en lugar de aproximado. n8n queda como pipeline puro de embeddings + storage.
 
 ### 4. Usar
 
@@ -201,9 +202,8 @@ python scripts/coworkeria.py rm mi.pdf --proyecto tesis
 Ver [`docs/ROADMAP.md`](docs/ROADMAP.md) para el detalle por sesiones.
 
 **Mejoras técnicas pendientes (Fase 1.5):**
-- Páginas exactas en lugar de aproximadas en citas (parsear PDF per-page)
-- Dark mode + diseño responsive móvil en la UI
 - Deploy: Vercel (UI) + n8n cloud / VPS
+- OCR para PDFs escaneados (que hoy salen vacíos)
 
 ---
 

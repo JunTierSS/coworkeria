@@ -7,6 +7,7 @@ import clsx from "clsx";
 type Cita = {
   archivo: string;
   pagina: number;
+  pagina_exacta?: boolean;
   total_paginas: number;
   chunk_index: number;
   proyecto: string;
@@ -154,7 +155,7 @@ export default function ChatPage() {
                             </span>
                             <span>·</span>
                             <span>
-                              pág ~{c.pagina}/{c.total_paginas}
+                              pág {c.pagina_exacta ? "" : "~"}{c.pagina}/{c.total_paginas}
                             </span>
                             <span>·</span>
                             <span className="font-mono">{c.distancia.toFixed(3)}</span>

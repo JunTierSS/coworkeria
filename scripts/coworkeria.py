@@ -105,6 +105,52 @@ def _post_json(url: str, payload: dict) -> dict:
         return {"error": f"HTTP {e.code}", "body": e.read().decode()}
 
 
+def _extract_pdf_per_page_chunks(path: Path, archivo: str, proyecto: str, path_original: str) -> tuple[list[dict], int]:
+    """
+    Extrae texto por pagina con PyMuPDF y chunkea SIN cruzar bordes de pagina.
+    Cada chunk lleva su numero de pagina REAL (no aproximado).
+    """
+    try:
+        import fitz  # pymupdf
+    except ImportError:
+        sys.exit(RED("Falta pymupdf. Corre: pip install pymupdf"))
+
+    CHUNK_SIZE = 1000
+    OVERLAP = 200
+    doc = fitz.open(str(path))
+    total_paginas = len(doc)
+    chunks: list[dict] = []
+    chunk_idx = 0
+    for page_num, page in enumerate(doc, start=1):
+        text = page.get_text("text")
+        if not text.strip():
+            continue
+        i = 0
+        while i < len(text):
+            end = min(i + CHUNK_SIZE, len(text))
+            chunks.append({
+                "id": f"{proyecto}__{archivo}__chunk_{chunk_idx}",
+                "text": text[i:end],
+                "metadata": {
+                    "archivo": archivo,
+                    "proyecto": proyecto,
+                    "tipo": "pdf",
+                    "chunk_index": chunk_idx,
+                    "pagina": page_num,
+                    "total_paginas": total_paginas,
+                    "char_start_in_page": i,
+                    "char_end_in_page": end,
+                    "path_original": path_original,
+                },
+            })
+            chunk_idx += 1
+            if end >= len(text):
+                break
+            i += CHUNK_SIZE - OVERLAP
+    doc.close()
+    return chunks, total_paginas
+
+
 def _extract_docx_text(path: Path) -> str:
     """Extrae texto plano de un .docx preservando estructura basica."""
     try:
@@ -147,9 +193,20 @@ def cmd_ingest(args):
     print(DIM(f"  + Copiado a {dest.relative_to(ROOT)}"))
 
     if suf == ".pdf":
-        res = _post_multipart(
-            f"{N8N}/webhook/ingesta-pdf", src,
-            {"proyecto": args.proyecto, "path_original": str(dest)},
+        chunks, total_pag = _extract_pdf_per_page_chunks(src, src.name, args.proyecto, str(dest))
+        if not chunks:
+            sys.exit(RED("El PDF no contiene texto extraible (puede ser escaneado - OCR sera Fase 2)."))
+        print(DIM(f"  + PDF parseado: {total_pag} paginas, {len(chunks)} chunk(s) con pagina REAL"))
+        res = _post_json(
+            f"{N8N}/webhook/ingesta-texto",
+            {
+                "chunks": chunks,
+                "archivo": src.name,
+                "proyecto": args.proyecto,
+                "tipo": "pdf",
+                "total_paginas": total_pag,
+                "path_original": str(dest),
+            },
         )
     else:  # .docx
         text = _extract_docx_text(src)
@@ -192,7 +249,8 @@ def cmd_ask(args):
         print()
         print(BOLD(YELLOW(f"# Citas ({len(citas)}):")))
         for i, c in enumerate(citas, 1):
-            print(f"  [{i}] {c.get('archivo')} pag ~{c.get('pagina')}/{c.get('total_paginas')} "
+            tilde = "" if c.get("pagina_exacta") else "~"
+            print(f"  [{i}] {c.get('archivo')} pag {tilde}{c.get('pagina')}/{c.get('total_paginas')} "
                   f"(chunk {c.get('chunk_index')}, dist {c.get('distancia')})")
     if res.get("modo") == "mock":
         print()

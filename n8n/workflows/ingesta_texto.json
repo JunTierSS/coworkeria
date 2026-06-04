@@ -16,13 +16,13 @@
     },
     {
       "parameters": {
-        "jsCode": "const wh = $input.first();\nconst body = wh.json.body || {};\nconst text = body.text || '';\nconst archivo = body.archivo || 'documento.txt';\nconst proyecto = body.proyecto || 'default';\nconst tipo = body.tipo || 'texto';\nconst total_paginas = body.total_paginas || 1;\nconst path_original = body.path_original || '';\n\nconst CHUNK_SIZE = 1000;\nconst OVERLAP = 200;\nconst chunks = [];\nlet i = 0, chunkIndex = 0;\nwhile (i < text.length) {\n  const end = Math.min(i + CHUNK_SIZE, text.length);\n  const pagina_aprox = total_paginas > 1 ? Math.floor((i / Math.max(text.length, 1)) * total_paginas) + 1 : 1;\n  chunks.push({\n    json: {\n      id: `${proyecto}__${archivo}__chunk_${chunkIndex}`,\n      text: text.slice(i, end),\n      metadata: { archivo, proyecto, tipo, chunk_index: chunkIndex, char_start: i, char_end: end, pagina_aprox, total_paginas, path_original }\n    }\n  });\n  chunkIndex++;\n  if (end >= text.length) break;\n  i += CHUNK_SIZE - OVERLAP;\n}\nif (chunks.length === 0) {\n  throw new Error('Texto vacio - nada que indexar');\n}\nreturn chunks;"
+        "jsCode": "// Soporta dos modos:\n// 1) body.chunks: [{text, metadata}, ...]  -> pre-procesados (CLI/UI con paginas reales)\n// 2) body.text: \"...\"                       -> chunkea aqui (compatibilidad)\nconst wh = $input.first();\nconst body = wh.json.body || {};\nconst archivo = body.archivo || 'documento.txt';\nconst proyecto = body.proyecto || 'default';\nconst tipo = body.tipo || 'texto';\nconst total_paginas = body.total_paginas || 1;\nconst path_original = body.path_original || '';\n\n// Modo 1: chunks ya vienen armados\nif (Array.isArray(body.chunks) && body.chunks.length) {\n  return body.chunks.map((c, i) => ({\n    json: {\n      id: c.id || `${proyecto}__${archivo}__chunk_${i}`,\n      text: c.text,\n      metadata: {\n        archivo, proyecto, tipo, path_original, total_paginas,\n        ...(c.metadata || {}),\n        chunk_index: c.metadata?.chunk_index ?? i,\n      }\n    }\n  }));\n}\n\n// Modo 2: text crudo -> chunking aqui\nconst text = body.text || '';\nconst CHUNK_SIZE = 1000;\nconst OVERLAP = 200;\nconst chunks = [];\nlet i = 0, chunkIndex = 0;\nwhile (i < text.length) {\n  const end = Math.min(i + CHUNK_SIZE, text.length);\n  const pagina_aprox = total_paginas > 1 ? Math.floor((i / Math.max(text.length, 1)) * total_paginas) + 1 : 1;\n  chunks.push({\n    json: {\n      id: `${proyecto}__${archivo}__chunk_${chunkIndex}`,\n      text: text.slice(i, end),\n      metadata: { archivo, proyecto, tipo, chunk_index: chunkIndex, char_start: i, char_end: end, pagina_aprox, pagina: pagina_aprox, total_paginas, path_original }\n    }\n  });\n  chunkIndex++;\n  if (end >= text.length) break;\n  i += CHUNK_SIZE - OVERLAP;\n}\nif (chunks.length === 0) {\n  throw new Error('Texto vacio - nada que indexar');\n}\nreturn chunks;"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [220, 0],
       "id": "chunk-txt-1",
-      "name": "Chunking + Metadata"
+      "name": "Normalize input"
     },
     {
       "parameters": {
@@ -94,7 +94,7 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={ \"status\": \"ok\", \"chunks_guardados\": {{ $('Chunking + Metadata').all().length }} }",
+        "responseBody": "={ \"status\": \"ok\", \"chunks_guardados\": {{ $('Normalize input').all().length }} }",
         "options": {}
       },
       "type": "n8n-nodes-base.respondToWebhook",
@@ -105,8 +105,8 @@
     }
   ],
   "connections": {
-    "Webhook Texto": { "main": [[{"node":"Chunking + Metadata","type":"main","index":0}]] },
-    "Chunking + Metadata": { "main": [[{"node":"Prep batch embeddings","type":"main","index":0}]] },
+    "Webhook Texto": { "main": [[{"node":"Normalize input","type":"main","index":0}]] },
+    "Normalize input": { "main": [[{"node":"Prep batch embeddings","type":"main","index":0}]] },
     "Prep batch embeddings": { "main": [[{"node":"Embeddings (OpenRouter)","type":"main","index":0}]] },
     "Embeddings (OpenRouter)": { "main": [[{"node":"Merge embeddings","type":"main","index":0}]] },
     "Merge embeddings": { "main": [[{"node":"Aggregate for Chroma","type":"main","index":0}]] },
