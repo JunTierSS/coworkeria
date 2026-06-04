@@ -234,6 +234,93 @@ def _extract_pdf_per_page_chunks(path: Path, archivo: str, proyecto: str, path_o
     return chunks, total_paginas
 
 
+def _extract_xlsx_chunks(path: Path, archivo: str, proyecto: str, path_original: str) -> tuple[list[dict], int]:
+    """
+    Extrae cada hoja de un Excel como texto estructurado.
+    Una hoja chica -> 1 chunk. Una hoja grande -> chunks por bloques de filas.
+    Metadata incluye hoja + rango de celdas + tipo (datos/formulas detectables).
+    Devuelve (chunks, total_hojas).
+    """
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        sys.exit(RED("Falta openpyxl. Corre: pip install openpyxl"))
+
+    # data_only=False para preservar formulas; los valores cacheados estan en data_only=True
+    wb_formulas = load_workbook(filename=str(path), data_only=False, read_only=True)
+    wb_values = load_workbook(filename=str(path), data_only=True, read_only=True)
+
+    ROWS_PER_CHUNK = 40  # Filas por chunk (cabe en ~1000-1500 chars con anchos razonables)
+    chunks: list[dict] = []
+    chunk_idx = 0
+    total_hojas = len(wb_values.sheetnames)
+
+    for hoja_idx, sheet_name in enumerate(wb_values.sheetnames, start=1):
+        ws_v = wb_values[sheet_name]
+        ws_f = wb_formulas[sheet_name]
+        # Detectar si la hoja tiene formulas (al menos una celda con '=')
+        tiene_formulas = False
+        max_row = ws_v.max_row or 0
+        max_col = ws_v.max_column or 0
+        if max_row == 0 or max_col == 0:
+            continue
+
+        # Recorrer en bloques de ROWS_PER_CHUNK filas
+        for start_row in range(1, max_row + 1, ROWS_PER_CHUNK):
+            end_row = min(start_row + ROWS_PER_CHUNK - 1, max_row)
+            lines = [f"Hoja: {sheet_name}  (filas {start_row}-{end_row} de {max_row})"]
+            # Reconstruir como markdown table-like
+            try:
+                from openpyxl.utils import get_column_letter
+            except Exception:
+                def get_column_letter(n):
+                    s = ""
+                    while n > 0:
+                        n, r = divmod(n - 1, 26)
+                        s = chr(65 + r) + s
+                    return s
+
+            for row_idx in range(start_row, end_row + 1):
+                cells_v = []
+                for col_idx in range(1, max_col + 1):
+                    val = ws_v.cell(row=row_idx, column=col_idx).value
+                    formula = ws_f.cell(row=row_idx, column=col_idx).value
+                    if isinstance(formula, str) and formula.startswith("="):
+                        tiene_formulas = True
+                        cells_v.append(f"{get_column_letter(col_idx)}{row_idx}={val} [{formula}]")
+                    elif val is not None and val != "":
+                        cells_v.append(f"{get_column_letter(col_idx)}{row_idx}={val}")
+                if cells_v:
+                    lines.append(" | ".join(str(c) for c in cells_v))
+            text = "\n".join(lines)
+            if len(text.strip()) < 30:
+                continue
+            chunks.append({
+                "id": f"{proyecto}__{archivo}__chunk_{chunk_idx}",
+                "text": text,
+                "metadata": {
+                    "archivo": archivo,
+                    "proyecto": proyecto,
+                    "tipo": "xlsx_formulas" if tiene_formulas else "xlsx",
+                    "hoja": sheet_name,
+                    "hoja_index": hoja_idx,
+                    "total_hojas": total_hojas,
+                    "rango_celdas": f"A{start_row}:{get_column_letter(max_col)}{end_row}",
+                    "fila_inicio": start_row,
+                    "fila_fin": end_row,
+                    "chunk_index": chunk_idx,
+                    "pagina": hoja_idx,  # mapeo: la "pagina" en Excel es la hoja
+                    "total_paginas": total_hojas,
+                    "path_original": path_original,
+                },
+            })
+            chunk_idx += 1
+
+    wb_formulas.close()
+    wb_values.close()
+    return chunks, total_hojas
+
+
 def _extract_docx_text(path: Path) -> str:
     """Extrae texto plano de un .docx preservando estructura basica."""
     try:
@@ -266,8 +353,8 @@ def cmd_ingest(args):
     if not src.exists():
         sys.exit(RED(f"No existe: {src}"))
     suf = src.suffix.lower()
-    if suf not in (".pdf", ".docx"):
-        sys.exit(RED(f"Formato no soportado: {suf}. Soportados: .pdf, .docx"))
+    if suf not in (".pdf", ".docx", ".xlsx", ".xls"):
+        sys.exit(RED(f"Formato no soportado: {suf}. Soportados: .pdf, .docx, .xlsx"))
 
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     dest_name = f"{args.proyecto}__{src.name}"
@@ -288,6 +375,24 @@ def cmd_ingest(args):
                 "proyecto": args.proyecto,
                 "tipo": "pdf",
                 "total_paginas": total_pag,
+                "path_original": str(dest),
+            },
+        )
+    elif suf in (".xlsx", ".xls"):
+        chunks, total_hojas = _extract_xlsx_chunks(src, src.name, args.proyecto, str(dest))
+        if not chunks:
+            sys.exit(RED("El Excel no contiene celdas con datos."))
+        tiene_formulas = any(c["metadata"].get("tipo") == "xlsx_formulas" for c in chunks)
+        modo = "datos+formulas" if tiene_formulas else "datos"
+        print(DIM(f"  + Excel parseado: {total_hojas} hoja(s), {len(chunks)} chunk(s), modo: {modo}"))
+        res = _post_json(
+            f"{N8N}/webhook/ingesta-texto",
+            {
+                "chunks": chunks,
+                "archivo": src.name,
+                "proyecto": args.proyecto,
+                "tipo": "xlsx",
+                "total_paginas": total_hojas,
                 "path_original": str(dest),
             },
         )

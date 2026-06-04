@@ -38,9 +38,9 @@ export default function DocumentosPage() {
 
   const subir = async (file: File) => {
     const name = file.name.toLowerCase();
-    const ok = name.endsWith(".pdf") || name.endsWith(".docx");
+    const ok = name.endsWith(".pdf") || name.endsWith(".docx") || name.endsWith(".xlsx") || name.endsWith(".xls");
     if (!ok) {
-      setUploadMsg("Solo se aceptan archivos PDF o DOCX.");
+      setUploadMsg("Solo se aceptan archivos PDF, DOCX o XLSX.");
       return;
     }
     setUploading(true);
@@ -112,7 +112,7 @@ export default function DocumentosPage() {
           <input
             ref={inputRef}
             type="file"
-            accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            accept=".pdf,.docx,.xlsx,.xls,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
@@ -129,7 +129,7 @@ export default function DocumentosPage() {
             <div className="flex flex-col items-center gap-2">
               <Upload className="w-8 h-8 text-zinc-400 dark:text-zinc-500" />
               <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
-                Arrastra un PDF o DOCX aquí o haz click para seleccionar
+                Arrastra un PDF, DOCX o XLSX aquí o haz click para seleccionar
               </p>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
                 Se indexará en el proyecto <strong>{proyecto}</strong>

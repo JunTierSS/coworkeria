@@ -101,7 +101,7 @@ También con Web UI: `localhost:3000` → arrastrar PDF/DOCX → preguntar en el
 
 | # | Función | Estado |
 |---|---|---|
-| F1 | Guardar documento | ✅ PDF + DOCX (incluye OCR de PDFs escaneados via Claude Vision) |
+| F1 | Guardar documento | ✅ PDF + DOCX + XLSX (con OCR de PDFs escaneados y soporte de fórmulas Excel) |
 | F2 | Procesamiento automático | ✅ chunking + embeddings (OpenAI) + store |
 | F3 | Chat sobre el conocimiento | ✅ Claude Sonnet 4 |
 | F4 | Búsqueda semántica | ✅ Chroma query con filtro por proyecto |
@@ -131,7 +131,7 @@ cp .env.example .env
 # editar .env y poner OPENROUTER_API_KEY
 
 # Instalar deps Python
-pip install chromadb reportlab python-docx pymupdf
+pip install chromadb reportlab python-docx pymupdf openpyxl
 
 # Instalar deps UI
 cd ui && npm install && cd ..
