@@ -7,7 +7,7 @@ export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { pregunta, proyecto, n_results = 5, web_search = false } = body || {};
+  const { pregunta, proyecto, n_results = 5, web_search = false, historia, contexto_proyecto } = body || {};
   if (!pregunta) {
     return NextResponse.json({ error: "Falta 'pregunta'" }, { status: 400 });
   }
@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
     const res = await fetch(`${config.n8nUrl}/webhook/consulta`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pregunta, proyecto, n_results, web_search }),
+      body: JSON.stringify({ pregunta, proyecto, n_results, web_search, historia: historia || [], contexto_proyecto: contexto_proyecto || "" }),
     });
     const text = await res.text();
     if (!res.ok) {

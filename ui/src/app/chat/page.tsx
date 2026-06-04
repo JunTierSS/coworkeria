@@ -1,8 +1,11 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { useProject } from "@/components/ProjectProvider";
-import { Send, Loader2, Quote, Sparkles, ShieldCheck, ShieldAlert, ShieldX, Users, GitBranch, AlertTriangle, Globe, ExternalLink } from "lucide-react";
+import { Send, Loader2, Quote, Sparkles, ShieldCheck, ShieldAlert, ShieldX, Users, GitBranch, AlertTriangle, Globe, ExternalLink, Brain, Trash2, RefreshCw, ChevronDown, ChevronUp } from "lucide-react";
 import clsx from "clsx";
+
+const HISTORY_KEY_PREFIX = "chat_history_";
+const MAX_HISTORY = 10;
 
 type Cita = {
   archivo: string;
@@ -260,17 +263,75 @@ function CouncilBadge({ verdict }: { verdict: Verdict | "loading" | "error" }) {
 }
 
 
+type Estado = {
+  total_archivos: number;
+  total_chunks: number;
+  resumen: string;
+  temas_principales: string[];
+  ultimas_ingestas: { archivo: string; tema: string; ingested_at?: string }[];
+  ts: number;
+  from_cache?: boolean;
+};
+
 export default function ChatPage() {
   const { proyecto } = useProject();
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [webSearch, setWebSearch] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [estado, setEstado] = useState<Estado | null>(null);
+  const [estadoLoading, setEstadoLoading] = useState(false);
+  const [estadoOpen, setEstadoOpen] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const ultimoProyectoRef = useRef<string | null>(null);
+
+  // Cargar historia + estado al cambiar de proyecto
+  useEffect(() => {
+    if (!proyecto) return;
+    if (ultimoProyectoRef.current === proyecto) return;
+    ultimoProyectoRef.current = proyecto;
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY_PREFIX + proyecto);
+      setMsgs(raw ? (JSON.parse(raw) as Msg[]) : []);
+    } catch {
+      setMsgs([]);
+    }
+    // Cargar estado vivo
+    fetchEstado(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proyecto]);
+
+  const fetchEstado = async (force: boolean) => {
+    if (!proyecto) return;
+    setEstadoLoading(true);
+    try {
+      const r = await fetch(`/api/estado?proyecto=${encodeURIComponent(proyecto)}${force ? "&force=1" : ""}`);
+      const d = await r.json();
+      if (!r.ok) setEstado(null);
+      else setEstado(d);
+    } catch {
+      setEstado(null);
+    } finally {
+      setEstadoLoading(false);
+    }
+  };
+
+  // Persistir msgs cuando cambian
+  useEffect(() => {
+    if (!proyecto) return;
+    try {
+      localStorage.setItem(HISTORY_KEY_PREFIX + proyecto, JSON.stringify(msgs));
+    } catch {}
+  }, [msgs, proyecto]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [msgs, loading]);
+
+  const limpiarConversacion = () => {
+    if (!confirm("Borrar toda la conversación actual de este proyecto?")) return;
+    setMsgs([]);
+  };
 
   const enviar = async () => {
     const pregunta = input.trim();
@@ -279,10 +340,24 @@ export default function ChatPage() {
     setInput("");
     setLoading(true);
     try {
+      // Construir historia para memoria conversacional: ultimos N turnos completos
+      const historia = msgs
+        .slice(-MAX_HISTORY * 2)
+        .map((m) => ({
+          role: m.role,
+          content: m.content || "",
+        }));
       const r = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pregunta, proyecto, n_results: 5, web_search: webSearch }),
+        body: JSON.stringify({
+          pregunta,
+          proyecto,
+          n_results: 5,
+          web_search: webSearch,
+          historia,
+          contexto_proyecto: estado?.resumen || "",
+        }),
       });
       const data = await r.json();
       if (!r.ok) {
@@ -363,17 +438,94 @@ export default function ChatPage() {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <header className="border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 sm:px-6 py-3 sm:py-4">
-        <h1 className="text-lg font-semibold tracking-tight">Chat</h1>
-        <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-          Preguntando sobre el proyecto{" "}
-          <span className="font-medium text-zinc-900 dark:text-zinc-100">{proyecto}</span>
-        </p>
+      <header className="border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Chat</h1>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+            Sobre proyecto{" "}
+            <span className="font-medium text-zinc-900 dark:text-zinc-100">{proyecto}</span>
+            {msgs.length > 0 && <span className="ml-2">· {msgs.length} mensajes en memoria</span>}
+          </p>
+        </div>
+        {msgs.length > 0 && (
+          <button
+            onClick={limpiarConversacion}
+            className="text-[11px] px-2 py-1 rounded text-zinc-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-1"
+            title="Borrar conversación"
+          >
+            <Trash2 className="w-3 h-3" />
+            Nueva conversación
+          </button>
+        )}
       </header>
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
-        <div className="max-w-3xl mx-auto space-y-6">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 sm:px-6 py-4">
+        <div className="max-w-3xl mx-auto space-y-4">
+          {/* Card de contexto vivo del proyecto */}
+          {estado && estado.total_archivos > 0 && (
+            <details
+              open={estadoOpen}
+              onToggle={(e) => setEstadoOpen((e.target as HTMLDetailsElement).open)}
+              className="bg-gradient-to-br from-indigo-50/70 to-purple-50/70 dark:from-indigo-950/30 dark:to-purple-950/30 border border-indigo-200 dark:border-indigo-900 rounded-lg"
+            >
+              <summary className="cursor-pointer px-3 py-2 flex items-center gap-2 list-none text-xs">
+                <Brain className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span className="font-semibold text-indigo-700 dark:text-indigo-300">
+                  Estado del proyecto
+                </span>
+                <span className="text-zinc-500 dark:text-zinc-400">
+                  · {estado.total_archivos} archivos · {estado.total_chunks} chunks
+                </span>
+                <span className="ml-auto flex items-center gap-1.5">
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      fetchEstado(true);
+                    }}
+                    disabled={estadoLoading}
+                    className="p-1 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 rounded disabled:opacity-50"
+                    title="Regenerar contexto"
+                  >
+                    {estadoLoading ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <RefreshCw className="w-3 h-3" />
+                    )}
+                  </button>
+                  {estadoOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                </span>
+              </summary>
+              <div className="px-3 pb-3 space-y-2">
+                <p className="text-sm text-zinc-800 dark:text-zinc-200 leading-relaxed">
+                  {estado.resumen}
+                </p>
+                {estado.temas_principales.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {estado.temas_principales.map((t, i) => (
+                      <span
+                        key={i}
+                        className="text-[10px] bg-white dark:bg-zinc-900 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded-full"
+                      >
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {estado.ultimas_ingestas.length > 0 && (
+                  <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                    <span className="font-medium">Últimos ingestados:</span>{" "}
+                    {estado.ultimas_ingestas.map((u) => u.archivo).join(" · ")}
+                  </div>
+                )}
+                <p className="text-[10px] text-zinc-500 dark:text-zinc-400 italic">
+                  Este contexto se incluye en cada pregunta para dar visión global. Se actualiza
+                  automáticamente cada 24h o cuando lo regenerás manualmente.
+                </p>
+              </div>
+            </details>
+          )}
+
           {msgs.length === 0 && !loading && (
             <div className="text-center py-16">
               <div className="inline-flex w-12 h-12 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 items-center justify-center mb-4">
