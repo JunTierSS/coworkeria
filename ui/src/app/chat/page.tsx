@@ -15,27 +15,31 @@ type Cita = {
   extracto: string;
 };
 
-type Voto = {
+type Juez = {
+  aspecto: string;
   juez: string;
-  fundamentada?: boolean;
   score?: number;
-  problemas?: string[];
+  omite_info_critica?: boolean;
+  hay_contradicciones?: boolean;
+  omisiones?: string[];
+  contradicciones?: string[];
   razonamiento?: string;
   error?: string;
   ms?: number;
 };
 
+type CheckCita = { cita: string; archivo: string; pagina: number; valida: boolean };
+type CheckNumero = { numero: string; encontrado: boolean };
+type CheckEntidad = { entidad: string; encontrada: boolean };
+
 type Verdict = {
-  veredicto:
-    | "consenso_fundamentada"
-    | "consenso_no_fundamentada"
-    | "mayoria_a_favor"
-    | "mayoria_en_contra"
-    | "sin_consenso_jueces_fallaron";
+  veredicto: "fundamentada" | "con_observaciones" | "no_fundamentada";
   score_promedio: number;
-  fundamentada_votos: string;
-  problemas_detectados: string[];
-  votos: Voto[];
+  hard_score: { citas_ok: string; numeros_ok: string; entidades_ok: string };
+  hard_checks: { citas: CheckCita[]; numeros: CheckNumero[]; entidades: CheckEntidad[] };
+  hard_problems: string[];
+  soft_problems: string[];
+  jueces: Juez[];
 };
 
 type Msg =
@@ -54,7 +58,7 @@ function CouncilBadge({ verdict }: { verdict: Verdict | "loading" | "error" }) {
       <div className="flex items-center gap-1.5 text-[11px] text-zinc-500 dark:text-zinc-400 px-1">
         <Loader2 className="w-3 h-3 animate-spin" />
         <Users className="w-3 h-3" />
-        <span>Consejo de 3 LLMs evaluando fundamentación...</span>
+        <span>Verificando citas, números y razonamiento...</span>
       </div>
     );
   }
@@ -68,35 +72,23 @@ function CouncilBadge({ verdict }: { verdict: Verdict | "loading" | "error" }) {
 
   const v = verdict.veredicto;
   const styles = {
-    consenso_fundamentada: {
+    fundamentada: {
       bg: "bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800",
       text: "text-emerald-700 dark:text-emerald-300",
       icon: <ShieldCheck className="w-3.5 h-3.5" />,
-      label: "Consejo: respuesta fundamentada",
+      label: "Verificado: respuesta fundamentada",
     },
-    mayoria_a_favor: {
+    con_observaciones: {
       bg: "bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800",
       text: "text-amber-700 dark:text-amber-300",
       icon: <ShieldAlert className="w-3.5 h-3.5" />,
-      label: "Consejo: mayoría a favor (con observaciones)",
+      label: "Verificado con observaciones",
     },
-    mayoria_en_contra: {
+    no_fundamentada: {
       bg: "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800",
       text: "text-red-700 dark:text-red-300",
       icon: <ShieldX className="w-3.5 h-3.5" />,
-      label: "Consejo: problemas detectados",
-    },
-    consenso_no_fundamentada: {
-      bg: "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800",
-      text: "text-red-700 dark:text-red-300",
-      icon: <ShieldX className="w-3.5 h-3.5" />,
-      label: "Consejo: posible alucinación",
-    },
-    sin_consenso_jueces_fallaron: {
-      bg: "bg-zinc-50 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700",
-      text: "text-zinc-600 dark:text-zinc-400",
-      icon: <ShieldAlert className="w-3.5 h-3.5" />,
-      label: "Consejo: jueces fallaron",
+      label: "Problemas de fundamentación detectados",
     },
   }[v];
 
@@ -116,31 +108,65 @@ function CouncilBadge({ verdict }: { verdict: Verdict | "loading" | "error" }) {
         {styles?.icon}
         <span>{styles?.label ?? v}</span>
         <span className="ml-auto text-[10px] opacity-70">
-          {verdict.fundamentada_votos} · score {verdict.score_promedio}/5
+          score {verdict.score_promedio}/5
         </span>
       </summary>
-      <div className="px-3 pb-2.5 space-y-1.5">
-        {verdict.problemas_detectados.length > 0 && (
-          <div className="text-[11px] mt-1.5">
-            <p className={clsx("font-medium mb-0.5", styles?.text)}>Problemas:</p>
+
+      <div className="px-3 pb-3 space-y-2.5">
+        {/* Hard checks (verificaciones deterministicas) */}
+        <div className="mt-2">
+          <p className={clsx("text-[10px] font-semibold uppercase tracking-wide mb-1", styles?.text)}>
+            Verificaciones deterministas
+          </p>
+          <div className="grid grid-cols-3 gap-1.5 text-[11px]">
+            <div className="bg-white dark:bg-zinc-800/50 px-2 py-1 rounded border border-zinc-200 dark:border-zinc-700">
+              <span className="text-zinc-500 dark:text-zinc-400">Citas:</span>{" "}
+              <span className="font-mono font-medium">{verdict.hard_score.citas_ok}</span>
+            </div>
+            <div className="bg-white dark:bg-zinc-800/50 px-2 py-1 rounded border border-zinc-200 dark:border-zinc-700">
+              <span className="text-zinc-500 dark:text-zinc-400">Números:</span>{" "}
+              <span className="font-mono font-medium">{verdict.hard_score.numeros_ok}</span>
+            </div>
+            <div className="bg-white dark:bg-zinc-800/50 px-2 py-1 rounded border border-zinc-200 dark:border-zinc-700">
+              <span className="text-zinc-500 dark:text-zinc-400">Entidades:</span>{" "}
+              <span className="font-mono font-medium">{verdict.hard_score.entidades_ok}</span>
+            </div>
+          </div>
+        </div>
+
+        {verdict.hard_problems.length > 0 && (
+          <div className="text-[11px]">
+            <p className={clsx("font-medium mb-0.5", styles?.text)}>Problemas duros (código):</p>
             <ul className="list-disc pl-4 space-y-0.5 text-zinc-700 dark:text-zinc-300">
-              {verdict.problemas_detectados.slice(0, 5).map((p, i) => (
+              {verdict.hard_problems.slice(0, 6).map((p, i) => (
                 <li key={i}>{p}</li>
               ))}
             </ul>
           </div>
         )}
-        <div className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-2 space-y-0.5">
-          {verdict.votos.map((vt, i) => (
+
+        {verdict.soft_problems.length > 0 && (
+          <div className="text-[11px]">
+            <p className={clsx("font-medium mb-0.5", styles?.text)}>Razonamiento de jueces:</p>
+            <ul className="list-disc pl-4 space-y-0.5 text-zinc-700 dark:text-zinc-300">
+              {verdict.soft_problems.slice(0, 6).map((p, i) => (
+                <li key={i}>{p}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="text-[10px] text-zinc-500 dark:text-zinc-400 space-y-0.5 pt-1 border-t border-zinc-200 dark:border-zinc-700">
+          {verdict.jueces.map((j, i) => (
             <div key={i} className="flex items-center gap-2">
-              <span className="font-mono">{vt.juez.split("/").pop()}:</span>
-              {vt.error ? (
+              <span className="font-medium">{j.aspecto}:</span>
+              <span className="font-mono opacity-70">{j.juez.split("/").pop()}</span>
+              {j.error ? (
                 <span className="text-red-500">error</span>
               ) : (
                 <>
-                  <span>{vt.fundamentada ? "✓ fundamentada" : "✗ no fundamentada"}</span>
-                  <span>score {vt.score}</span>
-                  <span className="opacity-50">{vt.ms}ms</span>
+                  <span>score {j.score ?? "?"}</span>
+                  <span className="opacity-50">{j.ms}ms</span>
                 </>
               )}
             </div>
@@ -206,6 +232,7 @@ export default function ChatPage() {
               pregunta,
               respuesta: data.respuesta,
               contexto,
+              citas: data.citas || [],
             }),
           })
             .then((r) => r.json())
