@@ -1,7 +1,7 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { useProject } from "@/components/ProjectProvider";
-import { Send, Loader2, Quote, Sparkles, ShieldCheck, ShieldAlert, ShieldX, Users, GitBranch, AlertTriangle } from "lucide-react";
+import { Send, Loader2, Quote, Sparkles, ShieldCheck, ShieldAlert, ShieldX, Users, GitBranch, AlertTriangle, Globe, ExternalLink } from "lucide-react";
 import clsx from "clsx";
 
 type Cita = {
@@ -12,6 +12,12 @@ type Cita = {
   chunk_index: number;
   proyecto: string;
   distancia: number;
+  extracto: string;
+};
+
+type CitaWeb = {
+  url: string;
+  titulo: string;
   extracto: string;
 };
 
@@ -59,7 +65,9 @@ type Msg =
       role: "assistant";
       content: string;
       citas: Cita[];
+      citas_web?: CitaWeb[];
       contradicciones?: Contradiccion[];
+      web_search?: boolean;
       modo?: string;
       verdict?: Verdict | "loading" | "error";
     };
@@ -256,6 +264,7 @@ export default function ChatPage() {
   const { proyecto } = useProject();
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
+  const [webSearch, setWebSearch] = useState(false);
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -273,7 +282,7 @@ export default function ChatPage() {
       const r = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pregunta, proyecto, n_results: 5 }),
+        body: JSON.stringify({ pregunta, proyecto, n_results: 5, web_search: webSearch }),
       });
       const data = await r.json();
       if (!r.ok) {
@@ -286,7 +295,9 @@ export default function ChatPage() {
           role: "assistant",
           content: data.respuesta || "(sin respuesta)",
           citas: data.citas || [],
+          citas_web: data.citas_web || [],
           contradicciones: data.contradicciones || [],
+          web_search: data.web_search === true,
           modo: data.modo,
           verdict: "loading",
         };
@@ -409,7 +420,47 @@ export default function ChatPage() {
                       respuesta mock (LLM real cuando configures las keys)
                     </div>
                   )}
+                  {m.web_search && (
+                    <div className="mt-2 inline-flex items-center gap-1 text-[10px] text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 px-2 py-0.5 rounded">
+                      <Globe className="w-3 h-3" />
+                      respuesta complementada con búsqueda web
+                    </div>
+                  )}
                 </div>
+
+                {/* Fuentes web */}
+                {m.citas_web && m.citas_web.length > 0 && (
+                  <details className="bg-white dark:bg-zinc-900 border border-indigo-200 dark:border-indigo-900 rounded-lg">
+                    <summary className="cursor-pointer px-4 py-2.5 text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:text-indigo-900 dark:hover:text-indigo-100 flex items-center gap-2">
+                      <Globe className="w-3.5 h-3.5" />
+                      Ver {m.citas_web.length} fuente{m.citas_web.length === 1 ? "" : "s"} web
+                    </summary>
+                    <div className="px-4 pb-3 space-y-2.5">
+                      {m.citas_web.map((c, idx) => (
+                        <div
+                          key={idx}
+                          className="text-xs border-l-2 border-indigo-300 dark:border-indigo-700 pl-3 py-1"
+                        >
+                          <a
+                            href={c.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="font-medium text-indigo-700 dark:text-indigo-300 hover:underline inline-flex items-center gap-1"
+                          >
+                            {c.titulo}
+                            <ExternalLink className="w-3 h-3 inline" />
+                          </a>
+                          <p className="text-zinc-500 dark:text-zinc-500 text-[10px] mt-0.5 break-all">
+                            {c.url}
+                          </p>
+                          {c.extracto && (
+                            <p className="text-zinc-600 dark:text-zinc-300 italic mt-1">{c.extracto}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
 
                 {/* Contradicciones detectadas entre fuentes */}
                 {m.contradicciones && m.contradicciones.length > 0 && (
@@ -466,6 +517,21 @@ export default function ChatPage() {
       {/* Input */}
       <div className="border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 sm:px-6 py-3 sm:py-4">
         <div className="max-w-3xl mx-auto">
+          <div className="flex items-center gap-2 mb-2 px-1">
+            <button
+              onClick={() => setWebSearch((v) => !v)}
+              className={clsx(
+                "inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border transition",
+                webSearch
+                  ? "bg-indigo-50 dark:bg-indigo-900/40 border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300"
+                  : "bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:border-zinc-400 dark:hover:border-zinc-600"
+              )}
+              title={webSearch ? "Búsqueda web activada — desactivar" : "Buscar también en la web"}
+            >
+              <Globe className="w-3 h-3" />
+              {webSearch ? "Web search ON" : "Buscar también en web"}
+            </button>
+          </div>
           <div
             className={clsx(
               "flex items-end gap-2 rounded-2xl pl-4 pr-2 py-2 transition",
