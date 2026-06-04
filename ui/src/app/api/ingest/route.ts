@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { config } from "@/lib/config";
+import { logUsageExtracted } from "@/lib/uso";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -382,7 +383,13 @@ async function postChunks(chunks: Chunk[], archivo: string, proyecto: string, ti
   });
   const txt = await res.text();
   if (!res.ok) throw new Error(`n8n ${res.status}: ${txt.slice(0, 200)}`);
-  return JSON.parse(txt);
+  const data = JSON.parse(txt);
+  // Loguear usage del paso de indice si esta disponible
+  const indiceUsage = data?.indice?.usage_indice;
+  if (indiceUsage) {
+    logUsageExtracted(indiceUsage, { tipo: "ingesta_resumen", modelo: "openai/gpt-4o-mini", proyecto, archivo });
+  }
+  return data;
 }
 
 export async function POST(req: NextRequest) {

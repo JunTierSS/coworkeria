@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { chromaBase } from "@/lib/config";
+import { logUsageExtracted } from "@/lib/uso";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -42,7 +43,7 @@ async function getOpenRouterKey(): Promise<string | null> {
   return v.includes("...") ? null : v;
 }
 
-async function labelCluster(samples: string[], key: string): Promise<string> {
+async function labelCluster(samples: string[], key: string, proyecto: string | undefined): Promise<string> {
   const payload = {
     model: "openai/gpt-4o-mini",
     messages: [
@@ -72,6 +73,9 @@ async function labelCluster(samples: string[], key: string): Promise<string> {
     });
     if (!r.ok) return "(sin label)";
     const d = await r.json();
+    if (d.usage) {
+      logUsageExtracted(d.usage, { tipo: "clusters_label", modelo: "openai/gpt-4o-mini", proyecto });
+    }
     const text: string = d.choices?.[0]?.message?.content || "(sin label)";
     return text.replace(/^["'\s]+|["'\s]+$/g, "").slice(0, 60);
   } catch {
@@ -161,7 +165,7 @@ export async function POST(req: NextRequest) {
       // Labels en paralelo
       const labelPromises = Array.from(clustersByIdx.entries()).map(async ([id, entry]) => ({
         id,
-        label: await labelCluster(entry.samples, key),
+        label: await labelCluster(entry.samples, key, proyecto),
         count: entry.samples.length,
         archivos: Array.from(entry.archivos),
       }));
