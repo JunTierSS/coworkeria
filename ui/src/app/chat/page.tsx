@@ -1,7 +1,7 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { useProject } from "@/components/ProjectProvider";
-import { Send, Loader2, Quote, Sparkles } from "lucide-react";
+import { Send, Loader2, Quote, Sparkles, ShieldCheck, ShieldAlert, ShieldX, Users } from "lucide-react";
 import clsx from "clsx";
 
 type Cita = {
@@ -15,9 +15,142 @@ type Cita = {
   extracto: string;
 };
 
+type Voto = {
+  juez: string;
+  fundamentada?: boolean;
+  score?: number;
+  problemas?: string[];
+  razonamiento?: string;
+  error?: string;
+  ms?: number;
+};
+
+type Verdict = {
+  veredicto:
+    | "consenso_fundamentada"
+    | "consenso_no_fundamentada"
+    | "mayoria_a_favor"
+    | "mayoria_en_contra"
+    | "sin_consenso_jueces_fallaron";
+  score_promedio: number;
+  fundamentada_votos: string;
+  problemas_detectados: string[];
+  votos: Voto[];
+};
+
 type Msg =
   | { role: "user"; content: string }
-  | { role: "assistant"; content: string; citas: Cita[]; modo?: string };
+  | {
+      role: "assistant";
+      content: string;
+      citas: Cita[];
+      modo?: string;
+      verdict?: Verdict | "loading" | "error";
+    };
+
+function CouncilBadge({ verdict }: { verdict: Verdict | "loading" | "error" }) {
+  if (verdict === "loading") {
+    return (
+      <div className="flex items-center gap-1.5 text-[11px] text-zinc-500 dark:text-zinc-400 px-1">
+        <Loader2 className="w-3 h-3 animate-spin" />
+        <Users className="w-3 h-3" />
+        <span>Consejo de 3 LLMs evaluando fundamentación...</span>
+      </div>
+    );
+  }
+  if (verdict === "error") {
+    return (
+      <div className="text-[11px] text-zinc-500 dark:text-zinc-500 px-1">
+        Consejo no disponible
+      </div>
+    );
+  }
+
+  const v = verdict.veredicto;
+  const styles = {
+    consenso_fundamentada: {
+      bg: "bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800",
+      text: "text-emerald-700 dark:text-emerald-300",
+      icon: <ShieldCheck className="w-3.5 h-3.5" />,
+      label: "Consejo: respuesta fundamentada",
+    },
+    mayoria_a_favor: {
+      bg: "bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800",
+      text: "text-amber-700 dark:text-amber-300",
+      icon: <ShieldAlert className="w-3.5 h-3.5" />,
+      label: "Consejo: mayoría a favor (con observaciones)",
+    },
+    mayoria_en_contra: {
+      bg: "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800",
+      text: "text-red-700 dark:text-red-300",
+      icon: <ShieldX className="w-3.5 h-3.5" />,
+      label: "Consejo: problemas detectados",
+    },
+    consenso_no_fundamentada: {
+      bg: "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800",
+      text: "text-red-700 dark:text-red-300",
+      icon: <ShieldX className="w-3.5 h-3.5" />,
+      label: "Consejo: posible alucinación",
+    },
+    sin_consenso_jueces_fallaron: {
+      bg: "bg-zinc-50 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700",
+      text: "text-zinc-600 dark:text-zinc-400",
+      icon: <ShieldAlert className="w-3.5 h-3.5" />,
+      label: "Consejo: jueces fallaron",
+    },
+  }[v];
+
+  return (
+    <details
+      className={clsx(
+        "border rounded-lg group transition",
+        styles?.bg ?? "bg-zinc-50 border-zinc-200"
+      )}
+    >
+      <summary
+        className={clsx(
+          "cursor-pointer px-3 py-1.5 text-[11px] font-medium flex items-center gap-2 list-none",
+          styles?.text ?? "text-zinc-600"
+        )}
+      >
+        {styles?.icon}
+        <span>{styles?.label ?? v}</span>
+        <span className="ml-auto text-[10px] opacity-70">
+          {verdict.fundamentada_votos} · score {verdict.score_promedio}/5
+        </span>
+      </summary>
+      <div className="px-3 pb-2.5 space-y-1.5">
+        {verdict.problemas_detectados.length > 0 && (
+          <div className="text-[11px] mt-1.5">
+            <p className={clsx("font-medium mb-0.5", styles?.text)}>Problemas:</p>
+            <ul className="list-disc pl-4 space-y-0.5 text-zinc-700 dark:text-zinc-300">
+              {verdict.problemas_detectados.slice(0, 5).map((p, i) => (
+                <li key={i}>{p}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-2 space-y-0.5">
+          {verdict.votos.map((vt, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <span className="font-mono">{vt.juez.split("/").pop()}:</span>
+              {vt.error ? (
+                <span className="text-red-500">error</span>
+              ) : (
+                <>
+                  <span>{vt.fundamentada ? "✓ fundamentada" : "✗ no fundamentada"}</span>
+                  <span>score {vt.score}</span>
+                  <span className="opacity-50">{vt.ms}ms</span>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </details>
+  );
+}
+
 
 export default function ChatPage() {
   const { proyecto } = useProject();
@@ -49,15 +182,56 @@ export default function ChatPage() {
           { role: "assistant", content: `Error: ${data.error || "?"}`, citas: [] },
         ]);
       } else {
-        setMsgs((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content: data.respuesta || "(sin respuesta)",
-            citas: data.citas || [],
-            modo: data.modo,
-          },
-        ]);
+        const newMsg: Msg = {
+          role: "assistant",
+          content: data.respuesta || "(sin respuesta)",
+          citas: data.citas || [],
+          modo: data.modo,
+          verdict: "loading",
+        };
+        const idx = msgs.length + 1;
+        setMsgs((prev) => [...prev, newMsg]);
+        // Council validation async (no bloquea el render)
+        if ((data.citas || []).length > 0) {
+          const contexto = (data.citas || [])
+            .map(
+              (c: Cita, i: number) =>
+                `[${i + 1}] (archivo: ${c.archivo}, pag ${c.pagina_exacta ? "" : "~"}${c.pagina}/${c.total_paginas})\n${c.extracto}`
+            )
+            .join("\n\n---\n\n");
+          fetch("/api/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              pregunta,
+              respuesta: data.respuesta,
+              contexto,
+            }),
+          })
+            .then((r) => r.json())
+            .then((v: Verdict | { error: string }) => {
+              setMsgs((prev) =>
+                prev.map((m, i) =>
+                  i === idx && m.role === "assistant"
+                    ? { ...m, verdict: "error" in v ? "error" : v }
+                    : m
+                )
+              );
+            })
+            .catch(() => {
+              setMsgs((prev) =>
+                prev.map((m, i) =>
+                  i === idx && m.role === "assistant" ? { ...m, verdict: "error" } : m
+                )
+              );
+            });
+        } else {
+          setMsgs((prev) =>
+            prev.map((m, i) =>
+              i === idx && m.role === "assistant" ? { ...m, verdict: undefined } : m
+            )
+          );
+        }
       }
     } catch (e: unknown) {
       setMsgs((prev) => [
@@ -134,6 +308,9 @@ export default function ChatPage() {
                     </div>
                   )}
                 </div>
+
+                {/* Council verdict badge */}
+                {m.verdict && <CouncilBadge verdict={m.verdict} />}
 
                 {m.citas.length > 0 && (
                   <details className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg">

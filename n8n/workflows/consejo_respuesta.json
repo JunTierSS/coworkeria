@@ -1,0 +1,45 @@
+{
+  "name": "Consejo Respuesta",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "consejo",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "id": "wh-c-1",
+      "name": "Webhook Consejo"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Consejo de 3 LLMs distintas que evaluan si la respuesta esta fundamentada en los pasajes.\nconst body = $input.first().json.body || {};\nconst pregunta = body.pregunta || '';\nconst respuesta = body.respuesta || '';\nconst contexto = body.contexto || '';\n\nconst MODELS = [\n  'anthropic/claude-sonnet-4',\n  'openai/gpt-4o',\n  'meta-llama/llama-3.3-70b-instruct',\n];\n\nconst systemPrompt = `Eres un evaluador estricto de respuestas RAG. Recibes una pregunta del usuario, los pasajes recuperados de sus fuentes, y la respuesta que dio otra LLM.\n\nTu trabajo: determinar si la respuesta cumple los principios de CoWorkerIA:\n1. NUNCA INVENTA: cada afirmacion factual de la respuesta debe estar sustentada por los pasajes.\n2. SIEMPRE CITA: las citas [archivo, pag. N] deben apuntar al pasaje correcto.\n3. NO OMITE INFO CRITICA de los pasajes que responda directamente la pregunta.\n\nDevuelve EXCLUSIVAMENTE un JSON con esta estructura exacta:\n{\n  \"fundamentada\": true|false,\n  \"score\": 1|2|3|4|5,\n  \"problemas\": [\"descripcion corta de cada problema detectado, o array vacio\"],\n  \"razonamiento\": \"explicacion breve de tu veredicto en 1-2 frases\"\n}\n\nNo agregues texto fuera del JSON.`;\n\nconst userPrompt = `PREGUNTA DEL USUARIO:\\n${pregunta}\\n\\nPASAJES RECUPERADOS (fuente de verdad):\\n${contexto}\\n\\nRESPUESTA A EVALUAR:\\n${respuesta}`;\n\nasync function callJudge(model) {\n  const t0 = Date.now();\n  try {\n    const data = await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'https://openrouter.ai/api/v1/chat/completions',\n      headers: {\n        'Authorization': `Bearer ${$env.OPENROUTER_API_KEY}`,\n        'Content-Type': 'application/json',\n        'HTTP-Referer': 'http://localhost',\n        'X-Title': 'CoWorkerIA Council',\n      },\n      body: {\n        model,\n        messages: [\n          { role: 'system', content: systemPrompt },\n          { role: 'user', content: userPrompt },\n        ],\n        max_tokens: 1500,\n        temperature: 0,\n      },\n      json: true,\n    });\n    const ms = Date.now() - t0;\n    const raw = data.choices?.[0]?.message?.content || '{}';\n    let parsed;\n    try {\n      parsed = JSON.parse(raw);\n    } catch (e) {\n      // Limpiar code fences markdown + extraer primer JSON balanceado\n      const cleaned = raw.replace(/^```(?:json)?\\s*/gm, '').replace(/```\\s*$/gm, '').trim();\n      try {\n        parsed = JSON.parse(cleaned);\n      } catch (e2) {\n        // Buscar JSON balanceado en el texto\n        let depth = 0, start = -1, found = null;\n        for (let i = 0; i < cleaned.length; i++) {\n          if (cleaned[i] === '{') { if (depth === 0) start = i; depth++; }\n          else if (cleaned[i] === '}') { depth--; if (depth === 0 && start !== -1) { found = cleaned.slice(start, i + 1); break; } }\n        }\n        if (found) {\n          try { parsed = JSON.parse(found); }\n          catch { parsed = { error: 'JSON balanceado invalido', raw_preview: cleaned.slice(0, 300) }; }\n        } else {\n          parsed = { error: 'No se hallo JSON', raw_preview: cleaned.slice(0, 300) };\n        }\n      }\n    }\n    return { juez: model, ms, ...parsed };\n  } catch (e) {\n    return { juez: model, error: (e?.message || String(e)).slice(0,200), ms: Date.now() - t0 };\n  }\n}\n\n// IMPORTANTE: bindeamos this para que callJudge tenga acceso a this.helpers\nconst boundCall = callJudge.bind(this);\nconst votos = await Promise.all(MODELS.map(boundCall));\n\nconst validos = votos.filter(v => typeof v.fundamentada === 'boolean');\nconst totalEvaluado = validos.length;\nconst fundamentadaCount = validos.filter(v => v.fundamentada === true).length;\nconst scores = validos.map(v => typeof v.score === 'number' ? v.score : 3);\nconst scorePromedio = scores.length ? scores.reduce((a,b)=>a+b,0)/scores.length : 0;\n\nlet veredicto;\nif (totalEvaluado === 0) veredicto = 'sin_consenso_jueces_fallaron';\nelse if (fundamentadaCount === totalEvaluado) veredicto = 'consenso_fundamentada';\nelse if (fundamentadaCount === 0) veredicto = 'consenso_no_fundamentada';\nelse if (fundamentadaCount >= totalEvaluado / 2) veredicto = 'mayoria_a_favor';\nelse veredicto = 'mayoria_en_contra';\n\nconst problemasSet = new Set();\nfor (const v of validos) {\n  if (Array.isArray(v.problemas)) v.problemas.forEach(p => p && problemasSet.add(p));\n}\n\nreturn [{ json: {\n  veredicto,\n  score_promedio: Number(scorePromedio.toFixed(2)),\n  fundamentada_votos: `${fundamentadaCount}/${totalEvaluado}`,\n  problemas_detectados: Array.from(problemasSet),\n  votos,\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "id": "council-1",
+      "name": "Consejo (3 jueces en paralelo)"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [440, 0],
+      "id": "resp-c-1",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook Consejo": { "main": [[{"node":"Consejo (3 jueces en paralelo)","type":"main","index":0}]] },
+    "Consejo (3 jueces en paralelo)": { "main": [[{"node":"Respond to Webhook","type":"main","index":0}]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
