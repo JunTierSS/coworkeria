@@ -8,6 +8,7 @@
 data/documentos/*
 data/vectordb/*
 data/uso.jsonl
+data/estados/
 !data/documentos/.gitkeep
 !data/vectordb/.gitkeep
 
