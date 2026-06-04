@@ -105,10 +105,63 @@ def _post_json(url: str, payload: dict) -> dict:
         return {"error": f"HTTP {e.code}", "body": e.read().decode()}
 
 
+def _ocr_page_with_claude(image_bytes: bytes, page_num: int, openrouter_key: str) -> str:
+    """OCR de una pagina usando Claude vision via OpenRouter. Devuelve el texto extraido."""
+    import base64
+    import urllib.request
+    import urllib.error
+    b64 = base64.b64encode(image_bytes).decode()
+    payload = {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                {"type": "text", "text": "Extrae TODO el texto visible en esta pagina escaneada, exactamente como aparece. Mantene el orden de lectura natural. NO agregues comentarios ni explicaciones, solo el texto. Si la pagina esta en blanco, responde solo con: [pagina en blanco]."},
+            ],
+        }],
+        "max_tokens": 4000,
+        "temperature": 0,
+    }
+    req = urllib.request.Request(
+        "https://openrouter.ai/api/v1/chat/completions",
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {openrouter_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost",
+            "X-Title": "CoWorkerIA OCR",
+        },
+        data=json.dumps(payload).encode(),
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            d = json.loads(r.read())
+            text = d["choices"][0]["message"]["content"]
+            return "" if "[pagina en blanco]" in text else text
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()[:200]
+        print(RED(f"  X OCR pag {page_num} fallo: HTTP {e.code} {body}"))
+        return ""
+
+
+def _load_openrouter_key() -> str | None:
+    env_path = ROOT / ".env"
+    if not env_path.exists():
+        return None
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("OPENROUTER_API_KEY=") and "..." not in line:
+            return line.split("=", 1)[1].strip()
+    return None
+
+
 def _extract_pdf_per_page_chunks(path: Path, archivo: str, proyecto: str, path_original: str) -> tuple[list[dict], int]:
     """
     Extrae texto por pagina con PyMuPDF y chunkea SIN cruzar bordes de pagina.
     Cada chunk lleva su numero de pagina REAL (no aproximado).
+    Si una pagina no tiene texto extraible (PDF escaneado), hace fallback a OCR
+    via Claude Vision (OpenRouter).
     """
     try:
         import fitz  # pymupdf
@@ -119,10 +172,39 @@ def _extract_pdf_per_page_chunks(path: Path, archivo: str, proyecto: str, path_o
     OVERLAP = 200
     doc = fitz.open(str(path))
     total_paginas = len(doc)
-    chunks: list[dict] = []
-    chunk_idx = 0
+
+    # Primera pasada: extraer texto nativo y detectar paginas vacias
+    page_texts: list[tuple[int, str, bool]] = []  # (page_num, text, ocr_used)
+    paginas_sin_texto = []
     for page_num, page in enumerate(doc, start=1):
         text = page.get_text("text")
+        if text.strip():
+            page_texts.append((page_num, text, False))
+        else:
+            paginas_sin_texto.append(page_num)
+            page_texts.append((page_num, "", False))
+
+    # Segunda pasada: si hay paginas sin texto, hacer OCR
+    if paginas_sin_texto:
+        print(YELLOW(f"  ! {len(paginas_sin_texto)} pagina(s) sin texto extraible - usando OCR (Claude Vision via OpenRouter)"))
+        key = _load_openrouter_key()
+        if not key:
+            print(RED("  X No hay OPENROUTER_API_KEY en .env - no se puede hacer OCR. Estas paginas quedaran vacias."))
+        else:
+            for page_num in paginas_sin_texto:
+                page = doc[page_num - 1]
+                pix = page.get_pixmap(dpi=200)  # render a imagen
+                img_bytes = pix.tobytes("png")
+                print(DIM(f"    ... OCR pagina {page_num}/{total_paginas} ({len(img_bytes)//1024}KB)"))
+                ocr_text = _ocr_page_with_claude(img_bytes, page_num, key)
+                if ocr_text:
+                    page_texts[page_num - 1] = (page_num, ocr_text, True)
+                    print(DIM(f"    + {len(ocr_text)} chars extraidos por OCR"))
+
+    # Chunkear todo (text nativo y OCR juntos)
+    chunks: list[dict] = []
+    chunk_idx = 0
+    for page_num, text, ocr_used in page_texts:
         if not text.strip():
             continue
         i = 0
@@ -134,7 +216,8 @@ def _extract_pdf_per_page_chunks(path: Path, archivo: str, proyecto: str, path_o
                 "metadata": {
                     "archivo": archivo,
                     "proyecto": proyecto,
-                    "tipo": "pdf",
+                    "tipo": "pdf_ocr" if ocr_used else "pdf",
+                    "ocr": ocr_used,
                     "chunk_index": chunk_idx,
                     "pagina": page_num,
                     "total_paginas": total_paginas,

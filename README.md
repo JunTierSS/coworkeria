@@ -20,7 +20,16 @@ CoWorkerIA resuelve ese dolor con tres ingredientes:
 
 ---
 
-## Demo
+## Capturas
+
+| Vista | |
+|---|---|
+| **Documentos** | ![Documentos](docs/screenshots/01-documentos-light.png) |
+| **Chat con citas inline** | ![Chat](docs/screenshots/02-chat-light.png) |
+| **Dark mode** | ![Dark](docs/screenshots/03-documentos-dark.png) |
+| **Responsive móvil** | <img src="docs/screenshots/05-chat-mobile.png" width="320" alt="Mobile" /> |
+
+## Demo CLI
 
 ```bash
 $ python scripts/coworkeria.py ingest mi_paper.pdf --proyecto tesis
@@ -92,7 +101,7 @@ También con Web UI: `localhost:3000` → arrastrar PDF/DOCX → preguntar en el
 
 | # | Función | Estado |
 |---|---|---|
-| F1 | Guardar documento | ✅ PDF + DOCX |
+| F1 | Guardar documento | ✅ PDF + DOCX (incluye OCR de PDFs escaneados via Claude Vision) |
 | F2 | Procesamiento automático | ✅ chunking + embeddings (OpenAI) + store |
 | F3 | Chat sobre el conocimiento | ✅ Claude Sonnet 4 |
 | F4 | Búsqueda semántica | ✅ Chroma query con filtro por proyecto |
@@ -203,7 +212,6 @@ Ver [`docs/ROADMAP.md`](docs/ROADMAP.md) para el detalle por sesiones.
 
 **Mejoras técnicas pendientes (Fase 1.5):**
 - Deploy: Vercel (UI) + n8n cloud / VPS
-- OCR para PDFs escaneados (que hoy salen vacíos)
 
 ---
 
