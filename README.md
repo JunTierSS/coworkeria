@@ -104,7 +104,7 @@ También con Web UI: `localhost:3000` → arrastrar PDF/DOCX → preguntar en el
 
 | # | Función | Estado |
 |---|---|---|
-| F1 | Guardar documento | ✅ PDF, DOCX, XLSX, EML, imágenes (JPG/PNG), TXT, MD — con OCR, fórmulas Excel, Claude Vision para imágenes |
+| F1 | Guardar documento | ✅ PDF, DOCX, XLSX, EML, imágenes, TXT/MD, **.ipynb (Jupyter)**, **código (.py .js .ts .sql .json .yaml .sh y 30+ más)**, con **subida de carpetas completas** (`webkitdirectory` recursivo, skip silencioso de `node_modules`/`.git`/`__pycache__`) y chunking **code-aware** que respeta funciones y queries SQL completas |
 | F2 | Procesamiento automático | ✅ chunking + embeddings (OpenAI) + store |
 | F3 | Chat sobre el conocimiento | ✅ Claude Sonnet 4 |
 | F4 | Búsqueda semántica | ✅ Chroma query con filtro por proyecto |

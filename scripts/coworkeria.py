@@ -105,6 +105,123 @@ def _post_json(url: str, payload: dict) -> dict:
         return {"error": f"HTTP {e.code}", "body": e.read().decode()}
 
 
+def _chunk_code_aware(text: str, chunk_size: int = 1500, overlap: int = 200) -> list[str]:
+    """
+    Chunking que respeta bloques logicos (lineas en blanco dobles) y no parte
+    funciones/queries a la mitad cuando es posible.
+    """
+    import re
+    norm = text.replace("\r\n", "\n").replace("\r", "\n")
+    blocks = re.split(r"\n\s*\n", norm)
+    chunks: list[str] = []
+    current = ""
+
+    def flush():
+        nonlocal current
+        if current.strip():
+            chunks.append(current.strip())
+        current = ""
+
+    for block in blocks:
+        if not block.strip():
+            continue
+        candidate = (current + "\n\n" + block) if current else block
+        if len(candidate) <= chunk_size:
+            current = candidate
+            continue
+        flush()
+        if len(block) > chunk_size:
+            i = 0
+            while i < len(block):
+                end = min(i + chunk_size, len(block))
+                chunks.append(block[i:end])
+                if end >= len(block):
+                    break
+                i += chunk_size - overlap
+            current = ""
+        else:
+            current = block
+    flush()
+    return chunks
+
+
+def _extract_ipynb(path: Path) -> str:
+    """Extrae celdas code+markdown de un .ipynb (ignora outputs)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        sys.exit(RED(f"No pude parsear el .ipynb: {e}"))
+    parts: list[str] = []
+    code_n = 0
+    md_n = 0
+    for cell in data.get("cells", []):
+        src = cell.get("source", "")
+        if isinstance(src, list):
+            src = "".join(src)
+        if not src.strip():
+            continue
+        if cell.get("cell_type") == "markdown":
+            md_n += 1
+            parts.append(f"[Celda markdown #{md_n}]\n{src}")
+        elif cell.get("cell_type") == "code":
+            code_n += 1
+            parts.append(f"[Celda código #{code_n}]\n```\n{src}\n```")
+    return "\n\n---\n\n".join(parts)
+
+
+CODE_EXTS = {
+    ".py", ".pyi", ".rb", ".php", ".pl",
+    ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
+    ".go", ".rs", ".java", ".kt", ".swift", ".c", ".cpp", ".cc", ".h", ".hpp",
+    ".cs", ".scala", ".clj", ".ex", ".exs",
+    ".sql", ".graphql", ".gql",
+    ".json", ".jsonc", ".yaml", ".yml", ".toml", ".ini", ".env",
+    ".xml", ".html", ".htm", ".css", ".scss", ".sass", ".less",
+    ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
+    ".dockerfile",
+}
+
+
+def _extract_code_or_text(path: Path, archivo: str, proyecto: str, path_original: str, tipo: str, code_aware: bool) -> tuple[list[dict], int]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if not text.strip():
+        sys.exit(RED(f"El archivo {archivo} esta vacio."))
+    segments = _chunk_code_aware(text) if code_aware else None
+    if segments is None:
+        # chunking lineal por chars (texto plano)
+        segments = []
+        CHUNK_SIZE = 1000
+        OVERLAP = 200
+        i = 0
+        while i < len(text):
+            end = min(i + CHUNK_SIZE, len(text))
+            segments.append(text[i:end])
+            if end >= len(text):
+                break
+            i += CHUNK_SIZE - OVERLAP
+
+    lenguaje = path.suffix.lower().lstrip(".") if tipo == "codigo" else None
+    chunks = []
+    for idx, seg in enumerate(segments):
+        meta = {
+            "archivo": archivo,
+            "proyecto": proyecto,
+            "tipo": tipo,
+            "chunk_index": idx,
+            "pagina": 1,
+            "total_paginas": 1,
+            "path_original": path_original,
+        }
+        if lenguaje:
+            meta["lenguaje"] = lenguaje
+        chunks.append({
+            "id": f"{proyecto}__{archivo}__chunk_{idx}",
+            "text": seg,
+            "metadata": meta,
+        })
+    return chunks, len(chunks)
+
+
 def _extract_image(path: Path, archivo: str, proyecto: str, path_original: str) -> tuple[list[dict], str]:
     """
     Procesa una imagen (.jpg/.png/etc) via Claude Vision: extrae texto si lo hay
@@ -710,7 +827,8 @@ def cmd_ingest(args):
     suf = src.suffix.lower()
     SUPPORTED = {".pdf", ".docx", ".xlsx", ".xls", ".eml",
                  ".jpg", ".jpeg", ".png", ".gif", ".webp",
-                 ".txt", ".md", ".markdown"}
+                 ".txt", ".md", ".markdown", ".rst",
+                 ".ipynb"} | CODE_EXTS
     if suf not in SUPPORTED:
         sys.exit(RED(f"Formato no soportado: {suf}. Soportados: {', '.join(sorted(SUPPORTED))}"))
 
@@ -750,20 +868,38 @@ def cmd_ingest(args):
                 "path_original": str(dest),
             },
         )
-    elif suf in (".txt", ".md", ".markdown"):
+    elif suf in (".txt", ".md", ".markdown", ".rst"):
         tipo = "markdown" if suf in (".md", ".markdown") else "texto"
-        chunks, n = _extract_text_file(src, src.name, args.proyecto, str(dest), tipo)
+        chunks, n = _extract_code_or_text(src, src.name, args.proyecto, str(dest), tipo, code_aware=False)
         print(DIM(f"  + Texto plano ({tipo}): {n} chunk(s)"))
         res = _post_json(
             f"{N8N}/webhook/ingesta-texto",
-            {
-                "chunks": chunks,
-                "archivo": src.name,
-                "proyecto": args.proyecto,
-                "tipo": tipo,
-                "total_paginas": 1,
-                "path_original": str(dest),
-            },
+            {"chunks": chunks, "archivo": src.name, "proyecto": args.proyecto, "tipo": tipo, "total_paginas": 1, "path_original": str(dest)},
+        )
+    elif suf == ".ipynb":
+        text = _extract_ipynb(src)
+        if not text.strip():
+            sys.exit(RED("El .ipynb no tiene celdas con contenido."))
+        # Chunking code-aware (preserva bloques de codigo)
+        segments = _chunk_code_aware(text)
+        chunks = [{
+            "id": f"{args.proyecto}__{src.name}__chunk_{i}",
+            "text": seg,
+            "metadata": {"archivo": src.name, "proyecto": args.proyecto, "tipo": "ipynb",
+                         "chunk_index": i, "pagina": 1, "total_paginas": 1, "path_original": str(dest)},
+        } for i, seg in enumerate(segments)]
+        print(DIM(f"  + Notebook parseado: {len(chunks)} chunk(s)"))
+        res = _post_json(
+            f"{N8N}/webhook/ingesta-texto",
+            {"chunks": chunks, "archivo": src.name, "proyecto": args.proyecto, "tipo": "ipynb", "total_paginas": 1, "path_original": str(dest)},
+        )
+    elif suf in CODE_EXTS:
+        chunks, n = _extract_code_or_text(src, src.name, args.proyecto, str(dest), "codigo", code_aware=True)
+        lenguaje = suf.lstrip(".")
+        print(DIM(f"  + Codigo ({lenguaje}): {n} chunk(s) [code-aware]"))
+        res = _post_json(
+            f"{N8N}/webhook/ingesta-texto",
+            {"chunks": chunks, "archivo": src.name, "proyecto": args.proyecto, "tipo": "codigo", "total_paginas": 1, "path_original": str(dest)},
         )
     elif suf == ".eml":
         chunks, info = _extract_eml(src, src.name, args.proyecto, str(dest))
