@@ -1,8 +1,12 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useProject } from "@/components/ProjectProvider";
-import { Clock, Loader2, Sparkles, Calendar, FileText, ArrowRight, History } from "lucide-react";
+import { Clock, Loader2, Sparkles, Calendar, FileText, ArrowRight, History, RefreshCw, Search } from "lucide-react";
 import clsx from "clsx";
+
+const TOPIC_AUTO = "todos los hitos importantes del proyecto: decisiones, contratos, cambios, presupuestos, entregas, fechas clave, eventos relevantes";
+const CACHE_PREFIX = "timeline_cache_";
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 
 type Evento = {
   fecha: string;
@@ -89,26 +93,75 @@ export default function TimelinePage() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<TimelineResp | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [esAuto, setEsAuto] = useState(true);
+  const ultimoProyectoRef = useRef<string | null>(null);
 
-  const generar = async () => {
-    if (!topic.trim()) return;
-    setLoading(true);
+  // Carga el timeline para un topic dado, intentando cache primero si auto
+  const cargar = async (topicUsado: string, useCache: boolean) => {
     setError(null);
+    const cacheKey = useCache ? `${CACHE_PREFIX}${proyecto}__auto` : null;
+    if (cacheKey) {
+      try {
+        const raw = localStorage.getItem(cacheKey);
+        if (raw) {
+          const cached = JSON.parse(raw) as { ts: number; data: TimelineResp };
+          if (Date.now() - cached.ts < CACHE_TTL_MS) {
+            setData(cached.data);
+            return;
+          }
+        }
+      } catch {}
+    }
+    setLoading(true);
     setData(null);
     try {
       const r = await fetch("/api/timeline", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic, proyecto }),
+        body: JSON.stringify({ topic: topicUsado, proyecto }),
       });
       const d = await r.json();
       if (!r.ok) setError(d.error || "Error");
-      else setData(d);
+      else {
+        setData(d);
+        if (cacheKey) {
+          try {
+            localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: d }));
+          } catch {}
+        }
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
+  };
+
+  // Auto-generar al cambiar de proyecto (usando cache si existe)
+  useEffect(() => {
+    if (!proyecto) return;
+    if (ultimoProyectoRef.current === proyecto) return;
+    ultimoProyectoRef.current = proyecto;
+    setEsAuto(true);
+    setTopic("");
+    cargar(TOPIC_AUTO, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proyecto]);
+
+  const generarPorTopic = async () => {
+    if (!topic.trim()) return;
+    setEsAuto(false);
+    await cargar(topic, false);
+  };
+
+  const regenerarAuto = async () => {
+    setEsAuto(true);
+    setTopic("");
+    // Forzar refresh limpiando cache
+    try {
+      localStorage.removeItem(`${CACHE_PREFIX}${proyecto}__auto`);
+    } catch {}
+    await cargar(TOPIC_AUTO, false);
   };
 
   const eventos = data?.eventos || [];
@@ -125,43 +178,61 @@ export default function TimelinePage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-5xl mx-auto p-4 sm:p-8">
-        <header className="mb-6 sm:mb-8">
-          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-            <History className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
-            Timeline temporal
-          </h1>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-            Cómo evolucionó un tema en{" "}
-            <span className="font-medium text-zinc-900 dark:text-zinc-100">{proyecto}</span>
-          </p>
+        <header className="mb-4 sm:mb-6 flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+              <History className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
+              Timeline temporal
+            </h1>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+              {esAuto ? "Vista general de todos los hitos en" : "Filtrado en"}{" "}
+              <span className="font-medium text-zinc-900 dark:text-zinc-100">{proyecto}</span>
+            </p>
+          </div>
+          {data && (
+            <button
+              onClick={regenerarAuto}
+              disabled={loading}
+              className="text-xs px-3 py-1.5 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-1.5 disabled:opacity-50"
+            >
+              {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+              Regenerar vista general
+            </button>
+          )}
         </header>
 
-        {/* Input topic */}
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg p-4">
-          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-2">
-            Tema o concepto a rastrear
-          </label>
-          <div className="flex gap-2 flex-wrap">
+        {/* Búsqueda opcional */}
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg p-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Search className="w-4 h-4 text-zinc-400 dark:text-zinc-500 shrink-0" />
             <input
               type="text"
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && generar()}
-              placeholder='ej: "todo el proyecto restaurante" · "presupuesto y deadline" · "decisiones clave"'
-              className="flex-1 min-w-[200px] px-3 py-2 text-sm rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              onKeyDown={(e) => e.key === "Enter" && generarPorTopic()}
+              placeholder="Filtrar por tema específico (opcional) — ej: 'presupuesto', 'contratos legales', 'recruiting'"
+              className="flex-1 min-w-[200px] px-2 py-1.5 text-sm rounded bg-transparent border-0 focus:outline-none text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500"
             />
-            <button
-              onClick={generar}
-              disabled={!topic.trim() || loading}
-              className="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-2"
-            >
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-              Generar timeline
-            </button>
+            {topic.trim() && (
+              <button
+                onClick={generarPorTopic}
+                disabled={loading}
+                className="text-xs px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-30 flex items-center gap-1.5"
+              >
+                {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                Filtrar
+              </button>
+            )}
+            {!esAuto && (
+              <button
+                onClick={regenerarAuto}
+                disabled={loading}
+                className="text-xs px-3 py-1.5 rounded text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              >
+                Volver a vista general
+              </button>
+            )}
           </div>
-          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-2">
-            Buscamos eventos con fecha del tema. Para proyectos grandes podés pedir &quot;todos los hitos&quot; para que extraiga el máximo.
-          </p>
         </div>
 
         {error && (
