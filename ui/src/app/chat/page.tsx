@@ -1,7 +1,7 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { useProject } from "@/components/ProjectProvider";
-import { Send, Loader2, Quote, Sparkles, ShieldCheck, ShieldAlert, ShieldX, Users } from "lucide-react";
+import { Send, Loader2, Quote, Sparkles, ShieldCheck, ShieldAlert, ShieldX, Users, GitBranch, AlertTriangle } from "lucide-react";
 import clsx from "clsx";
 
 type Cita = {
@@ -13,6 +13,17 @@ type Cita = {
   proyecto: string;
   distancia: number;
   extracto: string;
+};
+
+type Contradiccion = {
+  pasaje_a: number;
+  pasaje_b: number;
+  sobre: string;
+  a_dice: string;
+  b_dice: string;
+  severidad: "alta" | "media" | "baja";
+  cita_a: string;
+  cita_b: string;
 };
 
 type Juez = {
@@ -48,9 +59,72 @@ type Msg =
       role: "assistant";
       content: string;
       citas: Cita[];
+      contradicciones?: Contradiccion[];
       modo?: string;
       verdict?: Verdict | "loading" | "error";
     };
+
+function ContradiccionesPanel({ contradicciones }: { contradicciones: Contradiccion[] }) {
+  const sevColor = (s: string) =>
+    s === "alta"
+      ? "text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/40"
+      : s === "media"
+      ? "text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/40"
+      : "text-zinc-700 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800";
+
+  return (
+    <details
+      open
+      className="bg-orange-50 dark:bg-orange-950/30 border border-orange-200 dark:border-orange-900 rounded-lg"
+    >
+      <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-orange-800 dark:text-orange-200 flex items-center gap-2 list-none">
+        <GitBranch className="w-4 h-4" />
+        <span>
+          {contradicciones.length} contradicción{contradicciones.length === 1 ? "" : "es"} detectada
+          {contradicciones.length === 1 ? "" : "s"} entre tus fuentes
+        </span>
+        <AlertTriangle className="w-3.5 h-3.5 ml-auto opacity-60" />
+      </summary>
+      <div className="px-3 pb-3 space-y-3">
+        {contradicciones.map((c, i) => (
+          <div
+            key={i}
+            className="border border-orange-200 dark:border-orange-900 bg-white dark:bg-zinc-900 rounded p-2.5 space-y-1.5"
+          >
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-orange-700 dark:text-orange-300">
+                Sobre {c.sobre}
+              </span>
+              <span
+                className={clsx("text-[10px] px-1.5 py-0.5 rounded font-medium", sevColor(c.severidad))}
+              >
+                severidad {c.severidad}
+              </span>
+            </div>
+            <div className="text-xs grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="border-l-2 border-blue-400 pl-2">
+                <div className="text-[10px] font-mono text-blue-700 dark:text-blue-300">
+                  [{c.pasaje_a}] {c.cita_a}
+                </div>
+                <p className="text-zinc-700 dark:text-zinc-200">{c.a_dice}</p>
+              </div>
+              <div className="border-l-2 border-purple-400 pl-2">
+                <div className="text-[10px] font-mono text-purple-700 dark:text-purple-300">
+                  [{c.pasaje_b}] {c.cita_b}
+                </div>
+                <p className="text-zinc-700 dark:text-zinc-200">{c.b_dice}</p>
+              </div>
+            </div>
+          </div>
+        ))}
+        <p className="text-[10px] text-orange-700 dark:text-orange-300 italic">
+          CoWorkerIA alerta sobre contradicciones pero deja la decisión al usuario.
+        </p>
+      </div>
+    </details>
+  );
+}
+
 
 function CouncilBadge({ verdict }: { verdict: Verdict | "loading" | "error" }) {
   if (verdict === "loading") {
@@ -212,6 +286,7 @@ export default function ChatPage() {
           role: "assistant",
           content: data.respuesta || "(sin respuesta)",
           citas: data.citas || [],
+          contradicciones: data.contradicciones || [],
           modo: data.modo,
           verdict: "loading",
         };
@@ -335,6 +410,11 @@ export default function ChatPage() {
                     </div>
                   )}
                 </div>
+
+                {/* Contradicciones detectadas entre fuentes */}
+                {m.contradicciones && m.contradicciones.length > 0 && (
+                  <ContradiccionesPanel contradicciones={m.contradicciones} />
+                )}
 
                 {/* Council verdict badge */}
                 {m.verdict && <CouncilBadge verdict={m.verdict} />}

@@ -109,6 +109,7 @@ También con Web UI: `localhost:3000` → arrastrar PDF/DOCX → preguntar en el
 | F6 | Modo conservador | ✅ "no encontré eso en tus fuentes" |
 | F7 | Modo crítico | ✅ "Observación crítica" detecta debilidades |
 | **F7+** | **LLM Council** (3 jueces) | ✅ Tras cada respuesta, un panel de **Claude + GPT-4o + Llama 3.3** valida fundamentación en paralelo. Badge con veredicto + problemas detectados. |
+| **F10** *(Fase 3)* | **Detección de contradicciones** | ✅ Cuando los chunks recuperados se contradicen entre sí (ej: presupuesto $80k en PDF del 02/04 vs $125k en email del 04/04), un detector LLM identifica las contradicciones, las pasa a Claude para que las flagué, y se muestran en un panel separado en la UI con severidad alta/media/baja. **Decisión queda al usuario** (alineado con principio del PRD). |
 | F8 | Gestión de documentos | ✅ ls + rm + UI con drag&drop |
 | F9 | Concepto de proyecto/tema | ✅ selector en sidebar, `--proyecto` en CLI |
 
