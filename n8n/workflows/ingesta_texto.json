@@ -1,0 +1,117 @@
+{
+  "name": "Ingesta texto",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ingesta-texto",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "id": "wh-txt-1",
+      "name": "Webhook Texto"
+    },
+    {
+      "parameters": {
+        "jsCode": "const wh = $input.first();\nconst body = wh.json.body || {};\nconst text = body.text || '';\nconst archivo = body.archivo || 'documento.txt';\nconst proyecto = body.proyecto || 'default';\nconst tipo = body.tipo || 'texto';\nconst total_paginas = body.total_paginas || 1;\nconst path_original = body.path_original || '';\n\nconst CHUNK_SIZE = 1000;\nconst OVERLAP = 200;\nconst chunks = [];\nlet i = 0, chunkIndex = 0;\nwhile (i < text.length) {\n  const end = Math.min(i + CHUNK_SIZE, text.length);\n  const pagina_aprox = total_paginas > 1 ? Math.floor((i / Math.max(text.length, 1)) * total_paginas) + 1 : 1;\n  chunks.push({\n    json: {\n      id: `${proyecto}__${archivo}__chunk_${chunkIndex}`,\n      text: text.slice(i, end),\n      metadata: { archivo, proyecto, tipo, chunk_index: chunkIndex, char_start: i, char_end: end, pagina_aprox, total_paginas, path_original }\n    }\n  });\n  chunkIndex++;\n  if (end >= text.length) break;\n  i += CHUNK_SIZE - OVERLAP;\n}\nif (chunks.length === 0) {\n  throw new Error('Texto vacio - nada que indexar');\n}\nreturn chunks;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "id": "chunk-txt-1",
+      "name": "Chunking + Metadata"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nreturn [{ json: { texts: items.map(i => i.json.text), items: items.map(i => i.json) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0],
+      "id": "prep-emb-1",
+      "name": "Prep batch embeddings"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/embeddings",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OPENROUTER_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ input: $json.texts, model: $env.EMBED_MODEL || 'openai/text-embedding-3-small' }) }}",
+        "options": { "timeout": 60000 }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [660, 0],
+      "id": "http-emb-1",
+      "name": "Embeddings (OpenRouter)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const res = $input.first().json;\nconst items = $('Prep batch embeddings').first().json.items;\nif (!res.data || res.data.length !== items.length) {\n  throw new Error(`Embedding count mismatch: got ${res.data?.length}, expected ${items.length}`);\n}\nreturn items.map((item, i) => ({ json: { ...item, embedding: res.data[i].embedding } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0],
+      "id": "merge-emb-1",
+      "name": "Merge embeddings"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nreturn [{ json: {\n  ids: items.map(i => i.json.id),\n  embeddings: items.map(i => i.json.embedding),\n  documents: items.map(i => i.json.text),\n  metadatas: items.map(i => i.json.metadata),\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 0],
+      "id": "agg-1",
+      "name": "Aggregate for Chroma"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:8000/api/v2/tenants/default_tenant/databases/default_database/collections/{{ $env.CHROMA_COLLECTION_ID }}/add",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1320, 0],
+      "id": "http-chroma-1",
+      "name": "POST Chroma /add"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\", \"chunks_guardados\": {{ $('Chunking + Metadata').all().length }} }",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1540, 0],
+      "id": "resp-1",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook Texto": { "main": [[{"node":"Chunking + Metadata","type":"main","index":0}]] },
+    "Chunking + Metadata": { "main": [[{"node":"Prep batch embeddings","type":"main","index":0}]] },
+    "Prep batch embeddings": { "main": [[{"node":"Embeddings (OpenRouter)","type":"main","index":0}]] },
+    "Embeddings (OpenRouter)": { "main": [[{"node":"Merge embeddings","type":"main","index":0}]] },
+    "Merge embeddings": { "main": [[{"node":"Aggregate for Chroma","type":"main","index":0}]] },
+    "Aggregate for Chroma": { "main": [[{"node":"POST Chroma /add","type":"main","index":0}]] },
+    "POST Chroma /add": { "main": [[{"node":"Respond to Webhook","type":"main","index":0}]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

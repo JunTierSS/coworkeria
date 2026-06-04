@@ -102,9 +102,10 @@ set -a && source .env && set +a && export N8N_BLOCK_ENV_ACCESS_IN_NODE=false && 
 
 UI de n8n (`localhost:5678`) → menú **⋮** → **Import from File**:
 - `n8n/workflows/ingesta_pdf.json`
+- `n8n/workflows/ingesta_texto.json` (usado por la ingesta de DOCX y texto plano)
 - `n8n/workflows/consulta_rag.json`
 
-Activar ambos con el toggle.
+Activar los tres con el toggle.
 
 ### 4. Usar el CLI o la Web UI
 
@@ -139,7 +140,7 @@ npm run dev
 
 | # | Función | Estado |
 |---|---|---|
-| F1 | Guardar documento | ✅ PDF (Word → Fase 2) |
+| F1 | Guardar documento | ✅ PDF + DOCX |
 | F2 | Procesamiento automático | ✅ chunking + embed (OpenAI text-embedding-3-small) + store |
 | F3 | Chat sobre el conocimiento | ✅ Claude Sonnet 4 vía OpenRouter |
 | F4 | Búsqueda semántica | ✅ Chroma query con filtro por proyecto |

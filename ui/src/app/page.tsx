@@ -37,8 +37,10 @@ export default function DocumentosPage() {
   }, [proyecto]);
 
   const subir = async (file: File) => {
-    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-      setUploadMsg("Solo se aceptan archivos PDF por ahora.");
+    const name = file.name.toLowerCase();
+    const ok = name.endsWith(".pdf") || name.endsWith(".docx");
+    if (!ok) {
+      setUploadMsg("Solo se aceptan archivos PDF o DOCX.");
       return;
     }
     setUploading(true);
@@ -109,7 +111,7 @@ export default function DocumentosPage() {
           <input
             ref={inputRef}
             type="file"
-            accept=".pdf,application/pdf"
+            accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
@@ -120,13 +122,13 @@ export default function DocumentosPage() {
           {uploading ? (
             <div className="flex flex-col items-center gap-2 text-zinc-600">
               <Loader2 className="w-6 h-6 animate-spin" />
-              <p className="text-sm">Procesando PDF... extrayendo texto y generando embeddings</p>
+              <p className="text-sm">Procesando documento... extrayendo texto y generando embeddings</p>
             </div>
           ) : (
             <div className="flex flex-col items-center gap-2">
               <Upload className="w-8 h-8 text-zinc-400" />
               <p className="text-sm font-medium text-zinc-700">
-                Arrastra un PDF aquí o haz click para seleccionar
+                Arrastra un PDF o DOCX aquí o haz click para seleccionar
               </p>
               <p className="text-xs text-zinc-500">
                 Se indexará en el proyecto <strong>{proyecto}</strong>

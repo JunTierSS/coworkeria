@@ -105,12 +105,40 @@ def _post_json(url: str, payload: dict) -> dict:
         return {"error": f"HTTP {e.code}", "body": e.read().decode()}
 
 
+def _extract_docx_text(path: Path) -> str:
+    """Extrae texto plano de un .docx preservando estructura basica."""
+    try:
+        import docx  # python-docx
+    except ImportError:
+        sys.exit(RED("Falta python-docx. Corre: pip install python-docx"))
+    doc = docx.Document(str(path))
+    parts: list[str] = []
+    for p in doc.paragraphs:
+        t = p.text.strip()
+        if not t:
+            continue
+        # Hint visual de seccion: marca headings con doble salto
+        style = (p.style.name or "").lower() if p.style else ""
+        if "heading" in style or "titulo" in style:
+            parts.append(f"\n\n{t}\n")
+        else:
+            parts.append(t)
+    # Tambien extrae texto de tablas
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells if c.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+    return "\n\n".join(parts)
+
+
 def cmd_ingest(args):
     src = Path(args.archivo).resolve()
     if not src.exists():
         sys.exit(RED(f"No existe: {src}"))
-    if src.suffix.lower() != ".pdf":
-        sys.exit(RED(f"Por ahora solo PDF (recibido: {src.suffix}). Word vendra en una iteracion siguiente."))
+    suf = src.suffix.lower()
+    if suf not in (".pdf", ".docx"):
+        sys.exit(RED(f"Formato no soportado: {suf}. Soportados: .pdf, .docx"))
 
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     dest_name = f"{args.proyecto}__{src.name}"
@@ -118,10 +146,26 @@ def cmd_ingest(args):
     shutil.copy2(src, dest)
     print(DIM(f"  + Copiado a {dest.relative_to(ROOT)}"))
 
-    res = _post_multipart(
-        f"{N8N}/webhook/ingesta-pdf", src,
-        {"proyecto": args.proyecto, "path_original": str(dest)},
-    )
+    if suf == ".pdf":
+        res = _post_multipart(
+            f"{N8N}/webhook/ingesta-pdf", src,
+            {"proyecto": args.proyecto, "path_original": str(dest)},
+        )
+    else:  # .docx
+        text = _extract_docx_text(src)
+        if not text.strip():
+            sys.exit(RED("El .docx no contiene texto extraible."))
+        print(DIM(f"  + Texto extraido del Word ({len(text)} chars)"))
+        res = _post_json(
+            f"{N8N}/webhook/ingesta-texto",
+            {
+                "text": text,
+                "archivo": src.name,
+                "proyecto": args.proyecto,
+                "tipo": "docx",
+                "path_original": str(dest),
+            },
+        )
     if "error" in res:
         print(RED(f"X Error de n8n: {res}"))
         return
