@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+html,
+body {
+  height: 100%;
+}
+
+/* Scrollbar discreto */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}

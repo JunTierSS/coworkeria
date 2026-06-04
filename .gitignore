@@ -1,0 +1,54 @@
+# Secrets / entorno
+.env
+.env.local
+*.key
+*.pem
+
+# Datos del usuario (privados, local-first)
+data/documentos/*
+data/vectordb/*
+!data/documentos/.gitkeep
+!data/vectordb/.gitkeep
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Python (si se usa para scripts)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# n8n (datos locales de la instancia)
+.n8n/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Editores
+.vscode/
+.idea/
+*.swp
+
+# Build / temporales
+dist/
+build/
+*.log
+tmp/
+
+# Next.js (UI)
+ui/.next/
+ui/out/
+ui/.vercel/
+ui/.turbo/
+ui/next-env.d.ts
+ui/.env.local
+ui/.env*.local
+
+# PDFs de prueba sueltos (deberian vivir en data/documentos/)
+/*.pdf
