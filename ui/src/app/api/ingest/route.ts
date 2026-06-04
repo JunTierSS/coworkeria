@@ -195,28 +195,32 @@ function chunkPerPage(
 }
 
 async function extractPdfPages(buf: Buffer): Promise<string[]> {
-  type PdfParse = (
-    data: Buffer,
-    options?: { pagerender?: (pageData: unknown) => Promise<string> }
-  ) => Promise<{ text: string; numpages: number }>;
-  const mod = (await import("pdf-parse")) as unknown as { default: PdfParse };
-  const pdfParse = mod.default;
-  const pages: string[] = [];
-  type PageData = {
-    getTextContent: (opts: object) => Promise<{ items: Array<{ str: string }> }>;
+  // pdf-parse v2 API: clase PDFParse, no funcion directa
+  type ParserClass = new (opts: { data: Buffer }) => {
+    getInfo: () => Promise<{ pages?: number; total?: number }>;
+    getText: (opts?: { partial?: number[] }) => Promise<{ text: string }>;
+    destroy: () => Promise<void>;
   };
-  await pdfParse(buf, {
-    pagerender: async (pageData: unknown) => {
-      const tc = await (pageData as PageData).getTextContent({
-        normalizeWhitespace: false,
-        disableCombineTextItems: false,
-      });
-      const text = tc.items.map((it) => it.str).join(" ");
-      pages.push(text);
-      return text;
-    },
-  });
-  return pages;
+  const mod = await import("pdf-parse");
+  const PDFParse = (mod as unknown as { PDFParse: ParserClass }).PDFParse;
+  const parser = new PDFParse({ data: buf });
+  try {
+    const info = await parser.getInfo();
+    // En v2: 'total' es el numero de paginas (number). 'pages' es un array de metadata.
+    const numPages = (info as unknown as { total?: number }).total ?? 1;
+    const pages: string[] = [];
+    for (let i = 1; i <= numPages; i++) {
+      try {
+        const r = await parser.getText({ partial: [i] });
+        pages.push(r.text || "");
+      } catch {
+        pages.push("");
+      }
+    }
+    return pages;
+  } finally {
+    await parser.destroy();
+  }
 }
 
 async function extractImageChunks(
