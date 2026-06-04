@@ -105,6 +105,71 @@ def _post_json(url: str, payload: dict) -> dict:
         return {"error": f"HTTP {e.code}", "body": e.read().decode()}
 
 
+def _extract_image(path: Path, archivo: str, proyecto: str, path_original: str) -> tuple[list[dict], str]:
+    """
+    Procesa una imagen (.jpg/.png/etc) via Claude Vision: extrae texto si lo hay
+    Y describe el contenido visual. Devuelve chunks + un texto resumen.
+    """
+    key = _load_openrouter_key()
+    if not key:
+        sys.exit(RED("OPENROUTER_API_KEY no esta en .env - imagenes requieren Claude Vision."))
+    img_bytes = path.read_bytes()
+    if len(img_bytes) > 5_000_000:
+        sys.exit(RED(f"Imagen muy grande ({len(img_bytes)//1024//1024}MB). Limite: 5MB."))
+
+    # Detectar MIME basico
+    ext = path.suffix.lower().lstrip(".")
+    mime = "image/png" if ext == "png" else "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
+
+    import base64
+    import urllib.request, urllib.error
+    b64 = base64.b64encode(img_bytes).decode()
+    payload = {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+                {"type": "text", "text": "Analiza esta imagen y produce DOS cosas separadas por '---':\n\n1. Texto visible: extrae TODO el texto que aparezca (tipo OCR). Si no hay texto, di '[sin texto]'.\n\n2. Descripcion: que muestra la imagen, objetos, personas, graficos, diagramas, etc. Se especifico y conciso. Si es un grafico/tabla, describe los datos.\n\nFormato exacto:\nTEXTO: ...\n---\nDESCRIPCION: ..."},
+            ],
+        }],
+        "max_tokens": 2000,
+        "temperature": 0,
+    }
+    req = urllib.request.Request(
+        "https://openrouter.ai/api/v1/chat/completions", method="POST",
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost",
+            "X-Title": "CoWorkerIA Image",
+        },
+        data=json.dumps(payload).encode(),
+    )
+    with urllib.request.urlopen(req, timeout=120) as r:
+        d = json.loads(r.read())
+        analysis = d["choices"][0]["message"]["content"]
+
+    full_text = f"[Imagen: {archivo}]\n{analysis}"
+    chunks = [{
+        "id": f"{proyecto}__{archivo}__chunk_0",
+        "text": full_text,
+        "metadata": {
+            "archivo": archivo,
+            "proyecto": proyecto,
+            "tipo": "imagen",
+            "formato": ext,
+            "tamanho_bytes": len(img_bytes),
+            "chunk_index": 0,
+            "pagina": 1,
+            "total_paginas": 1,
+            "path_original": path_original,
+            "extraido_por": "claude_vision",
+        },
+    }]
+    return chunks, analysis[:200]
+
+
 def _ocr_page_with_claude(image_bytes: bytes, page_num: int, openrouter_key: str) -> str:
     """OCR de una pagina usando Claude vision via OpenRouter. Devuelve el texto extraido."""
     import base64
@@ -173,11 +238,41 @@ def _extract_pdf_per_page_chunks(path: Path, archivo: str, proyecto: str, path_o
     doc = fitz.open(str(path))
     total_paginas = len(doc)
 
-    # Primera pasada: extraer texto nativo y detectar paginas vacias
+    # Primera pasada: extraer texto nativo + tablas, detectar paginas vacias
     page_texts: list[tuple[int, str, bool]] = []  # (page_num, text, ocr_used)
     paginas_sin_texto = []
     for page_num, page in enumerate(doc, start=1):
-        text = page.get_text("text")
+        # Texto en orden de lectura (PyMuPDF maneja columnas mejor que pdf-parse)
+        text = page.get_text("text", sort=True)
+
+        # Buscar tablas y agregarlas como markdown (mejor que el texto lineal)
+        try:
+            found = page.find_tables()
+            tables = list(getattr(found, "tables", []) or [])
+            if tables:
+                table_md_parts = []
+                for t_idx, tab in enumerate(tables, start=1):
+                    try:
+                        rows = tab.extract()
+                        if not rows or not any(any(c for c in r) for r in rows):
+                            continue
+                        rows = [[str(c or "").strip().replace("\n", " ") for c in r] for r in rows]
+                        n_cols = max(len(r) for r in rows)
+                        rows = [r + [""] * (n_cols - len(r)) for r in rows]
+                        md = [f"\n[Tabla {t_idx} en pagina {page_num}]"]
+                        md.append("| " + " | ".join(rows[0]) + " |")
+                        md.append("| " + " | ".join(["---"] * n_cols) + " |")
+                        for r in rows[1:]:
+                            md.append("| " + " | ".join(r) + " |")
+                        table_md_parts.append("\n".join(md))
+                    except Exception:
+                        continue
+                if table_md_parts:
+                    text = text + "\n\n" + "\n\n".join(table_md_parts)
+        except Exception:
+            # find_tables no esta en todas las versiones de pymupdf - silencioso fallback
+            pass
+
         if text.strip():
             page_texts.append((page_num, text, False))
         else:
@@ -247,8 +342,29 @@ def _extract_xlsx_chunks(path: Path, archivo: str, proyecto: str, path_original:
         sys.exit(RED("Falta openpyxl. Corre: pip install openpyxl"))
 
     # data_only=False para preservar formulas; los valores cacheados estan en data_only=True
-    wb_formulas = load_workbook(filename=str(path), data_only=False, read_only=True)
-    wb_values = load_workbook(filename=str(path), data_only=True, read_only=True)
+    # read_only=False para acceder a merged_cells (no soportado en read_only)
+    wb_formulas = load_workbook(filename=str(path), data_only=False, read_only=False)
+    wb_values = load_workbook(filename=str(path), data_only=True, read_only=False)
+
+    def fmt_value(v):
+        """Formatea valores: fechas como ISO, numeros sin decimales innecesarios."""
+        if v is None or v == "":
+            return None
+        import datetime
+        if isinstance(v, (datetime.datetime, datetime.date)):
+            return v.isoformat()
+        if isinstance(v, float) and v.is_integer():
+            return int(v)
+        return v
+
+    def get_merged_value(ws_v, row, col):
+        """Si la celda esta dentro de un merged range, devuelve el valor de la celda top-left."""
+        from openpyxl.utils import get_column_letter
+        cell_coord = f"{get_column_letter(col)}{row}"
+        for merged_range in ws_v.merged_cells.ranges:
+            if cell_coord in merged_range:
+                return ws_v.cell(row=merged_range.min_row, column=merged_range.min_col).value
+        return None
 
     ROWS_PER_CHUNK = 40  # Filas por chunk (cabe en ~1000-1500 chars con anchos razonables)
     chunks: list[dict] = []
@@ -283,13 +399,20 @@ def _extract_xlsx_chunks(path: Path, archivo: str, proyecto: str, path_original:
             for row_idx in range(start_row, end_row + 1):
                 cells_v = []
                 for col_idx in range(1, max_col + 1):
-                    val = ws_v.cell(row=row_idx, column=col_idx).value
+                    cell_v = ws_v.cell(row=row_idx, column=col_idx)
+                    val = fmt_value(cell_v.value)
                     formula = ws_f.cell(row=row_idx, column=col_idx).value
+                    # Si la celda es parte de merged y esta vacia, usar el valor del top-left
+                    if val is None:
+                        merged_val = get_merged_value(ws_v, row_idx, col_idx)
+                        if merged_val is not None:
+                            val = fmt_value(merged_val)
+                    addr = f"{get_column_letter(col_idx)}{row_idx}"
                     if isinstance(formula, str) and formula.startswith("="):
                         tiene_formulas = True
-                        cells_v.append(f"{get_column_letter(col_idx)}{row_idx}={val} [{formula}]")
+                        cells_v.append(f"{addr}={val} [{formula}]")
                     elif val is not None and val != "":
-                        cells_v.append(f"{get_column_letter(col_idx)}{row_idx}={val}")
+                        cells_v.append(f"{addr}={val}")
                 if cells_v:
                     lines.append(" | ".join(str(c) for c in cells_v))
             text = "\n".join(lines)
@@ -445,30 +568,139 @@ def _extract_eml(path: Path, archivo: str, proyecto: str, path_original: str) ->
 
 
 def _extract_docx_text(path: Path) -> str:
-    """Extrae texto plano de un .docx preservando estructura basica."""
+    """
+    Extrae texto de un .docx preservando estructura como markdown:
+    - Headings -> # / ## / ###
+    - Listas con vinetas -> -
+    - Listas numeradas -> 1. 2. 3.
+    - Tablas -> markdown table (con header si la primera fila parece header)
+    """
     try:
         import docx  # python-docx
     except ImportError:
         sys.exit(RED("Falta python-docx. Corre: pip install python-docx"))
+
     doc = docx.Document(str(path))
     parts: list[str] = []
-    for p in doc.paragraphs:
-        t = p.text.strip()
-        if not t:
-            continue
-        # Hint visual de seccion: marca headings con doble salto
-        style = (p.style.name or "").lower() if p.style else ""
-        if "heading" in style or "titulo" in style:
-            parts.append(f"\n\n{t}\n")
-        else:
-            parts.append(t)
-    # Tambien extrae texto de tablas
-    for table in doc.tables:
-        for row in table.rows:
-            cells = [c.text.strip() for c in row.cells if c.text.strip()]
-            if cells:
-                parts.append(" | ".join(cells))
-    return "\n\n".join(parts)
+
+    # Recorrer el body en orden (parrafos + tablas mezclados)
+    # python-docx no expone esto facil; iteramos sobre body element
+    from docx.oxml.ns import qn
+    body = doc.element.body
+
+    def heading_level(style_name: str) -> int:
+        s = style_name.lower()
+        if "heading 1" in s or "title" in s or "titulo 1" in s: return 1
+        if "heading 2" in s or "titulo 2" in s: return 2
+        if "heading 3" in s or "titulo 3" in s: return 3
+        if "heading" in s or "titulo" in s: return 4
+        return 0
+
+    list_counter = 0
+    last_was_list = False
+
+    for child in body.iterchildren():
+        tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+
+        if tag == "p":
+            # Buscar el parrafo correspondiente
+            para = None
+            for p in doc.paragraphs:
+                if p._p is child:
+                    para = p
+                    break
+            if para is None:
+                continue
+            text = para.text.strip()
+            if not text:
+                last_was_list = False
+                list_counter = 0
+                continue
+            style = para.style.name if para.style else ""
+            lvl = heading_level(style)
+            if lvl:
+                parts.append(f"\n{'#' * min(lvl, 6)} {text}\n")
+                last_was_list = False
+                list_counter = 0
+            else:
+                # Detectar si es item de lista (por pPr/numPr en el XML)
+                pPr = para._p.find(qn("w:pPr"))
+                numPr = pPr.find(qn("w:numPr")) if pPr is not None else None
+                if numPr is not None:
+                    # Es lista. Distinguir bullet vs numerada si hay info en numId
+                    # Simple: si veniamos en lista, sumar contador
+                    if last_was_list:
+                        list_counter += 1
+                    else:
+                        list_counter = 1
+                        last_was_list = True
+                    # Por simplicidad usamos vinetas
+                    parts.append(f"- {text}")
+                else:
+                    parts.append(text)
+                    last_was_list = False
+                    list_counter = 0
+        elif tag == "tbl":
+            tabla = None
+            for t in doc.tables:
+                if t._tbl is child:
+                    tabla = t
+                    break
+            if tabla is None:
+                continue
+            rows = []
+            for row in tabla.rows:
+                cells = [c.text.strip().replace("\n", " ") for c in row.cells]
+                if any(cells):
+                    rows.append(cells)
+            if not rows:
+                continue
+            n_cols = max(len(r) for r in rows)
+            rows = [r + [""] * (n_cols - len(r)) for r in rows]
+            # Markdown table con header
+            md = ["| " + " | ".join(rows[0]) + " |"]
+            md.append("| " + " | ".join(["---"] * n_cols) + " |")
+            for r in rows[1:]:
+                md.append("| " + " | ".join(r) + " |")
+            parts.append("\n".join(md))
+            last_was_list = False
+            list_counter = 0
+
+    return "\n\n".join(p for p in parts if p.strip())
+
+
+def _extract_text_file(path: Path, archivo: str, proyecto: str, path_original: str, tipo: str) -> tuple[list[dict], int]:
+    """Ingesta de .txt o .md: chunkear el texto crudo con chunks de 1000 chars."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if not text.strip():
+        sys.exit(RED(f"El archivo {archivo} esta vacio."))
+    CHUNK_SIZE = 1000
+    OVERLAP = 200
+    chunks = []
+    i = 0
+    chunk_idx = 0
+    while i < len(text):
+        end = min(i + CHUNK_SIZE, len(text))
+        chunks.append({
+            "id": f"{proyecto}__{archivo}__chunk_{chunk_idx}",
+            "text": text[i:end],
+            "metadata": {
+                "archivo": archivo,
+                "proyecto": proyecto,
+                "tipo": tipo,
+                "chunk_index": chunk_idx,
+                "char_start": i,
+                "char_end": end,
+                "pagina": 1,
+                "total_paginas": 1,
+                "path_original": path_original,
+            },
+        })
+        chunk_idx += 1
+        if end >= len(text):
+            break
+        i += CHUNK_SIZE - OVERLAP
+    return chunks, len(chunks)
 
 
 def cmd_ingest(args):
@@ -476,8 +708,11 @@ def cmd_ingest(args):
     if not src.exists():
         sys.exit(RED(f"No existe: {src}"))
     suf = src.suffix.lower()
-    if suf not in (".pdf", ".docx", ".xlsx", ".xls", ".eml"):
-        sys.exit(RED(f"Formato no soportado: {suf}. Soportados: .pdf, .docx, .xlsx, .eml"))
+    SUPPORTED = {".pdf", ".docx", ".xlsx", ".xls", ".eml",
+                 ".jpg", ".jpeg", ".png", ".gif", ".webp",
+                 ".txt", ".md", ".markdown"}
+    if suf not in SUPPORTED:
+        sys.exit(RED(f"Formato no soportado: {suf}. Soportados: {', '.join(sorted(SUPPORTED))}"))
 
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     dest_name = f"{args.proyecto}__{src.name}"
@@ -498,6 +733,35 @@ def cmd_ingest(args):
                 "proyecto": args.proyecto,
                 "tipo": "pdf",
                 "total_paginas": total_pag,
+                "path_original": str(dest),
+            },
+        )
+    elif suf in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        chunks, preview = _extract_image(src, src.name, args.proyecto, str(dest))
+        print(DIM(f"  + Imagen analizada por Claude Vision: {preview[:120]}..."))
+        res = _post_json(
+            f"{N8N}/webhook/ingesta-texto",
+            {
+                "chunks": chunks,
+                "archivo": src.name,
+                "proyecto": args.proyecto,
+                "tipo": "imagen",
+                "total_paginas": 1,
+                "path_original": str(dest),
+            },
+        )
+    elif suf in (".txt", ".md", ".markdown"):
+        tipo = "markdown" if suf in (".md", ".markdown") else "texto"
+        chunks, n = _extract_text_file(src, src.name, args.proyecto, str(dest), tipo)
+        print(DIM(f"  + Texto plano ({tipo}): {n} chunk(s)"))
+        res = _post_json(
+            f"{N8N}/webhook/ingesta-texto",
+            {
+                "chunks": chunks,
+                "archivo": src.name,
+                "proyecto": args.proyecto,
+                "tipo": tipo,
+                "total_paginas": 1,
                 "path_original": str(dest),
             },
         )

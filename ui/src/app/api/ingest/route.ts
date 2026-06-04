@@ -9,6 +9,8 @@ const DOCX_MIME =
 const XLSX_MIME =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const EML_MIMES = ["message/rfc822", "application/x-eml"];
+const IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp"];
+const TEXT_EXTS = [".txt", ".md", ".markdown"];
 
 const CHUNK_SIZE = 1000;
 const OVERLAP = 200;
@@ -79,6 +81,102 @@ async function extractPdfPages(buf: Buffer): Promise<string[]> {
   });
   return pages;
 }
+
+async function extractImageChunks(
+  buf: Buffer,
+  fileType: string,
+  archivo: string,
+  proyecto: string,
+  path_original: string
+): Promise<Chunk[]> {
+  // Lee OPENROUTER_API_KEY desde el .env del proyecto (raiz del repo, un nivel arriba de ui/)
+  const keyFromEnv = process.env.OPENROUTER_API_KEY;
+  let key = keyFromEnv;
+  if (!key) {
+    const fs = await import("fs");
+    const path = await import("path");
+    const envPath = path.resolve(process.cwd(), "..", ".env");
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, "utf-8");
+      const m = content.match(/^OPENROUTER_API_KEY=(.+)$/m);
+      if (m) key = m[1].trim();
+    }
+  }
+  if (!key || key.includes("...")) {
+    throw new Error("OPENROUTER_API_KEY no esta configurada - imagenes requieren Claude Vision.");
+  }
+  const mime = fileType.startsWith("image/") ? fileType : "image/png";
+  const b64 = buf.toString("base64");
+  const payload = {
+    model: "anthropic/claude-sonnet-4",
+    messages: [{
+      role: "user",
+      content: [
+        { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } },
+        { type: "text", text: "Analiza esta imagen y produce DOS cosas separadas por '---':\n\n1. Texto visible: extrae TODO el texto que aparezca (tipo OCR). Si no hay texto, di '[sin texto]'.\n\n2. Descripcion: que muestra la imagen, objetos, personas, graficos, diagramas, etc. Se especifico y conciso. Si es un grafico/tabla, describe los datos.\n\nFormato exacto:\nTEXTO: ...\n---\nDESCRIPCION: ..." },
+      ],
+    }],
+    max_tokens: 2000,
+    temperature: 0,
+  };
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "http://localhost",
+      "X-Title": "CoWorkerIA Image",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`OpenRouter ${res.status}: ${t.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const analysis: string = data.choices?.[0]?.message?.content ?? "(sin analisis)";
+  return [{
+    id: `${proyecto}__${archivo}__chunk_0`,
+    text: `[Imagen: ${archivo}]\n${analysis}`,
+    metadata: {
+      archivo, proyecto, tipo: "imagen",
+      tamanho_bytes: buf.length,
+      chunk_index: 0, pagina: 1, total_paginas: 1,
+      path_original,
+      extraido_por: "claude_vision",
+    },
+  }];
+}
+
+function chunkPlainText(
+  text: string,
+  archivo: string,
+  proyecto: string,
+  tipo: string,
+  path_original: string
+): Chunk[] {
+  const chunks: Chunk[] = [];
+  let i = 0, idx = 0;
+  while (i < text.length) {
+    const end = Math.min(i + CHUNK_SIZE, text.length);
+    chunks.push({
+      id: `${proyecto}__${archivo}__chunk_${idx}`,
+      text: text.slice(i, end),
+      metadata: {
+        archivo, proyecto, tipo,
+        chunk_index: idx,
+        char_start: i, char_end: end,
+        pagina: 1, total_paginas: 1,
+        path_original,
+      },
+    });
+    idx++;
+    if (end >= text.length) break;
+    i += CHUNK_SIZE - OVERLAP;
+  }
+  return chunks;
+}
+
 
 async function extractEmlChunks(
   buf: Buffer,
@@ -237,10 +335,13 @@ export async function POST(req: NextRequest) {
   const isDocx = file.type === DOCX_MIME || name.endsWith(".docx");
   const isXlsx = file.type === XLSX_MIME || name.endsWith(".xlsx") || name.endsWith(".xls");
   const isEml = EML_MIMES.includes(file.type) || name.endsWith(".eml");
+  const isImage =
+    file.type.startsWith("image/") || IMAGE_EXTS.some((e) => name.endsWith(e));
+  const isText = TEXT_EXTS.some((e) => name.endsWith(e)) || file.type === "text/plain" || file.type === "text/markdown";
 
-  if (!isPdf && !isDocx && !isXlsx && !isEml) {
+  if (!isPdf && !isDocx && !isXlsx && !isEml && !isImage && !isText) {
     return NextResponse.json(
-      { error: `Formato no soportado: ${file.type || name}. Soportados: PDF, DOCX, XLSX, EML.` },
+      { error: `Formato no soportado: ${file.type || name}. Soportados: PDF, DOCX, XLSX, EML, imagenes, TXT/MD.` },
       { status: 415 }
     );
   }
@@ -265,6 +366,38 @@ export async function POST(req: NextRequest) {
       const txt = await res.text();
       if (!res.ok) return NextResponse.json({ error: `n8n ${res.status}`, body: txt }, { status: 502 });
       return NextResponse.json({ ...JSON.parse(txt), archivo: file.name, proyecto, total_paginas });
+    }
+
+    if (isImage) {
+      if (buf.length > 5_000_000) {
+        return NextResponse.json({ error: "Imagen muy grande (max 5MB)." }, { status: 413 });
+      }
+      const chunks = await extractImageChunks(buf, file.type || "image/png", file.name, proyecto, "");
+      const res = await fetch(`${config.n8nUrl}/webhook/ingesta-texto`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chunks, archivo: file.name, proyecto, tipo: "imagen", total_paginas: 1 }),
+      });
+      const txt = await res.text();
+      if (!res.ok) return NextResponse.json({ error: `n8n ${res.status}`, body: txt }, { status: 502 });
+      return NextResponse.json({ ...JSON.parse(txt), archivo: file.name, proyecto });
+    }
+
+    if (isText) {
+      const text = buf.toString("utf-8");
+      if (!text.trim()) {
+        return NextResponse.json({ error: "Archivo de texto vacio." }, { status: 422 });
+      }
+      const tipo = name.endsWith(".md") || name.endsWith(".markdown") ? "markdown" : "texto";
+      const chunks = chunkPlainText(text, file.name, proyecto, tipo, "");
+      const res = await fetch(`${config.n8nUrl}/webhook/ingesta-texto`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chunks, archivo: file.name, proyecto, tipo, total_paginas: 1 }),
+      });
+      const txt = await res.text();
+      if (!res.ok) return NextResponse.json({ error: `n8n ${res.status}`, body: txt }, { status: 502 });
+      return NextResponse.json({ ...JSON.parse(txt), archivo: file.name, proyecto });
     }
 
     if (isEml) {
