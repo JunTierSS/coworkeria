@@ -79,11 +79,12 @@ export default function DocumentosPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-4xl mx-auto p-8">
-        <header className="mb-8">
+      <div className="max-w-4xl mx-auto p-4 sm:p-8">
+        <header className="mb-6 sm:mb-8">
           <h1 className="text-2xl font-semibold tracking-tight">Documentos</h1>
-          <p className="text-sm text-zinc-500 mt-1">
-            Proyecto: <span className="font-medium text-zinc-900">{proyecto}</span>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+            Proyecto:{" "}
+            <span className="font-medium text-zinc-900 dark:text-zinc-100">{proyecto}</span>
           </p>
         </header>
 
@@ -102,10 +103,10 @@ export default function DocumentosPage() {
           }}
           onClick={() => inputRef.current?.click()}
           className={clsx(
-            "border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition",
+            "border-2 border-dashed rounded-lg p-6 sm:p-8 text-center cursor-pointer transition",
             dragOver
-              ? "border-indigo-500 bg-indigo-50"
-              : "border-zinc-300 bg-white hover:border-zinc-400 hover:bg-zinc-50"
+              ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20"
+              : "border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 hover:border-zinc-400 dark:hover:border-zinc-600 hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
           )}
         >
           <input
@@ -120,17 +121,17 @@ export default function DocumentosPage() {
             }}
           />
           {uploading ? (
-            <div className="flex flex-col items-center gap-2 text-zinc-600">
+            <div className="flex flex-col items-center gap-2 text-zinc-600 dark:text-zinc-300">
               <Loader2 className="w-6 h-6 animate-spin" />
               <p className="text-sm">Procesando documento... extrayendo texto y generando embeddings</p>
             </div>
           ) : (
             <div className="flex flex-col items-center gap-2">
-              <Upload className="w-8 h-8 text-zinc-400" />
-              <p className="text-sm font-medium text-zinc-700">
+              <Upload className="w-8 h-8 text-zinc-400 dark:text-zinc-500" />
+              <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
                 Arrastra un PDF o DOCX aquí o haz click para seleccionar
               </p>
-              <p className="text-xs text-zinc-500">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
                 Se indexará en el proyecto <strong>{proyecto}</strong>
               </p>
             </div>
@@ -140,10 +141,10 @@ export default function DocumentosPage() {
         {uploadMsg && (
           <div
             className={clsx(
-              "mt-4 px-4 py-2 rounded text-sm",
+              "mt-4 px-4 py-2 rounded text-sm border",
               uploadMsg.startsWith("OK")
-                ? "bg-green-50 text-green-700 border border-green-200"
-                : "bg-red-50 text-red-700 border border-red-200"
+                ? "bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800"
+                : "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800"
             )}
           >
             {uploadMsg}
@@ -152,15 +153,15 @@ export default function DocumentosPage() {
 
         {/* Lista */}
         <section className="mt-10">
-          <h2 className="text-sm font-medium text-zinc-500 uppercase tracking-wide mb-3">
+          <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide mb-3">
             Indexados ({docs.length})
           </h2>
           {loading ? (
-            <div className="flex items-center gap-2 text-zinc-500 text-sm">
+            <div className="flex items-center gap-2 text-zinc-500 dark:text-zinc-400 text-sm">
               <Loader2 className="w-4 h-4 animate-spin" /> Cargando...
             </div>
           ) : docs.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 py-12 text-zinc-400">
+            <div className="flex flex-col items-center gap-2 py-12 text-zinc-400 dark:text-zinc-500">
               <Inbox className="w-10 h-10" />
               <p className="text-sm">Aún no hay documentos en este proyecto.</p>
             </div>
@@ -169,18 +170,20 @@ export default function DocumentosPage() {
               {docs.map((d) => (
                 <li
                   key={`${d.proyecto}/${d.archivo}`}
-                  className="flex items-center gap-3 px-4 py-3 bg-white border border-zinc-200 rounded-lg hover:border-zinc-300 transition group"
+                  className="flex items-center gap-3 px-4 py-3 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg hover:border-zinc-300 dark:hover:border-zinc-700 transition group"
                 >
-                  <FileText className="w-5 h-5 text-zinc-400 shrink-0" />
+                  <FileText className="w-5 h-5 text-zinc-400 dark:text-zinc-500 shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-zinc-900 truncate">{d.archivo}</p>
-                    <p className="text-xs text-zinc-500">
+                    <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate">
+                      {d.archivo}
+                    </p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
                       {d.chunks} chunks · {d.paginas} páginas
                     </p>
                   </div>
                   <button
                     onClick={() => eliminar(d.archivo)}
-                    className="opacity-0 group-hover:opacity-100 transition p-1.5 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded"
+                    className="md:opacity-0 md:group-hover:opacity-100 transition p-1.5 text-zinc-400 hover:text-red-600 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-900/30 rounded"
                     title="Eliminar"
                   >
                     <Trash2 className="w-4 h-4" />
