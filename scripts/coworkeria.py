@@ -321,6 +321,129 @@ def _extract_xlsx_chunks(path: Path, archivo: str, proyecto: str, path_original:
     return chunks, total_hojas
 
 
+def _extract_eml(path: Path, archivo: str, proyecto: str, path_original: str) -> tuple[list[dict], dict]:
+    """
+    Parsea un email .eml (export de Gmail/Outlook). Devuelve chunks + metadata del email.
+    Cada email se vuelve UN chunk con headers + cuerpo, o varios si el cuerpo es largo.
+    """
+    import email
+    from email import policy
+    from email.utils import parsedate_to_datetime
+
+    with open(path, "rb") as f:
+        msg = email.message_from_binary_file(f, policy=policy.default)
+
+    remitente = str(msg.get("From", "")).strip()
+    destinatario = str(msg.get("To", "")).strip()
+    cc = str(msg.get("Cc", "")).strip()
+    asunto = str(msg.get("Subject", "")).strip()
+    fecha_raw = msg.get("Date", "")
+    try:
+        fecha = parsedate_to_datetime(fecha_raw).isoformat() if fecha_raw else ""
+    except Exception:
+        fecha = str(fecha_raw)
+    hilo_id = str(msg.get("Message-ID", "") or msg.get("Thread-Topic", "") or asunto)
+
+    # Extraer cuerpo plano (preferir text/plain sobre text/html)
+    cuerpo = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            ctype = part.get_content_type()
+            if ctype == "text/plain":
+                try:
+                    cuerpo = part.get_content()
+                    break
+                except Exception:
+                    continue
+        if not cuerpo:
+            for part in msg.walk():
+                if part.get_content_type() == "text/html":
+                    try:
+                        import re
+                        html = part.get_content()
+                        cuerpo = re.sub(r"<[^>]+>", " ", html)
+                        cuerpo = re.sub(r"\s+", " ", cuerpo).strip()
+                        break
+                    except Exception:
+                        continue
+    else:
+        try:
+            cuerpo = msg.get_content()
+        except Exception:
+            cuerpo = msg.get_payload(decode=True).decode("utf-8", errors="replace")
+
+    cuerpo = cuerpo or "(sin cuerpo)"
+
+    # Construir texto representado: headers + cuerpo
+    header_block = (
+        f"De: {remitente}\n"
+        f"Para: {destinatario}\n"
+        + (f"Cc: {cc}\n" if cc else "")
+        + f"Fecha: {fecha}\n"
+        f"Asunto: {asunto}\n"
+        f"---\n"
+    )
+
+    CHUNK_SIZE = 1000
+    OVERLAP = 200
+    chunks = []
+    chunk_idx = 0
+    # Si todo cabe en un chunk, hacer uno solo
+    full_text = header_block + cuerpo
+    if len(full_text) <= CHUNK_SIZE * 1.5:
+        chunks.append({
+            "id": f"{proyecto}__{archivo}__chunk_0",
+            "text": full_text,
+            "metadata": {
+                "archivo": archivo,
+                "proyecto": proyecto,
+                "tipo": "email",
+                "chunk_index": 0,
+                "pagina": 1,
+                "total_paginas": 1,
+                "remitente": remitente,
+                "destinatario": destinatario,
+                "asunto": asunto,
+                "fecha": fecha,
+                "hilo_id": hilo_id[:120],
+                "path_original": path_original,
+            },
+        })
+    else:
+        # Chunkear el cuerpo (manteniendo headers como prefijo en cada chunk)
+        i = 0
+        while i < len(cuerpo):
+            end = min(i + CHUNK_SIZE, len(cuerpo))
+            text = header_block + cuerpo[i:end]
+            chunks.append({
+                "id": f"{proyecto}__{archivo}__chunk_{chunk_idx}",
+                "text": text,
+                "metadata": {
+                    "archivo": archivo,
+                    "proyecto": proyecto,
+                    "tipo": "email",
+                    "chunk_index": chunk_idx,
+                    "char_start": i,
+                    "char_end": end,
+                    "pagina": 1,
+                    "total_paginas": 1,
+                    "remitente": remitente,
+                    "destinatario": destinatario,
+                    "asunto": asunto,
+                    "fecha": fecha,
+                    "hilo_id": hilo_id[:120],
+                    "path_original": path_original,
+                },
+            })
+            chunk_idx += 1
+            if end >= len(cuerpo):
+                break
+            i += CHUNK_SIZE - OVERLAP
+
+    info = {"asunto": asunto, "remitente": remitente, "fecha": fecha, "chars_cuerpo": len(cuerpo)}
+    return chunks, info
+
+
 def _extract_docx_text(path: Path) -> str:
     """Extrae texto plano de un .docx preservando estructura basica."""
     try:
@@ -353,8 +476,8 @@ def cmd_ingest(args):
     if not src.exists():
         sys.exit(RED(f"No existe: {src}"))
     suf = src.suffix.lower()
-    if suf not in (".pdf", ".docx", ".xlsx", ".xls"):
-        sys.exit(RED(f"Formato no soportado: {suf}. Soportados: .pdf, .docx, .xlsx"))
+    if suf not in (".pdf", ".docx", ".xlsx", ".xls", ".eml"):
+        sys.exit(RED(f"Formato no soportado: {suf}. Soportados: .pdf, .docx, .xlsx, .eml"))
 
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     dest_name = f"{args.proyecto}__{src.name}"
@@ -375,6 +498,20 @@ def cmd_ingest(args):
                 "proyecto": args.proyecto,
                 "tipo": "pdf",
                 "total_paginas": total_pag,
+                "path_original": str(dest),
+            },
+        )
+    elif suf == ".eml":
+        chunks, info = _extract_eml(src, src.name, args.proyecto, str(dest))
+        print(DIM(f"  + Email parseado: \"{info['asunto']}\" de {info['remitente']} ({info['chars_cuerpo']} chars)"))
+        res = _post_json(
+            f"{N8N}/webhook/ingesta-texto",
+            {
+                "chunks": chunks,
+                "archivo": src.name,
+                "proyecto": args.proyecto,
+                "tipo": "email",
+                "total_paginas": 1,
                 "path_original": str(dest),
             },
         )

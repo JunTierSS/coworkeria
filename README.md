@@ -101,7 +101,7 @@ También con Web UI: `localhost:3000` → arrastrar PDF/DOCX → preguntar en el
 
 | # | Función | Estado |
 |---|---|---|
-| F1 | Guardar documento | ✅ PDF + DOCX + XLSX (con OCR de PDFs escaneados y soporte de fórmulas Excel) |
+| F1 | Guardar documento | ✅ PDF + DOCX + XLSX + EML (con OCR para escaneados, fórmulas Excel, headers de email) |
 | F2 | Procesamiento automático | ✅ chunking + embeddings (OpenAI) + store |
 | F3 | Chat sobre el conocimiento | ✅ Claude Sonnet 4 |
 | F4 | Búsqueda semántica | ✅ Chroma query con filtro por proyecto |

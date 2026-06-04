@@ -8,6 +8,7 @@ const DOCX_MIME =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const XLSX_MIME =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const EML_MIMES = ["message/rfc822", "application/x-eml"];
 
 const CHUNK_SIZE = 1000;
 const OVERLAP = 200;
@@ -78,6 +79,68 @@ async function extractPdfPages(buf: Buffer): Promise<string[]> {
   });
   return pages;
 }
+
+async function extractEmlChunks(
+  buf: Buffer,
+  archivo: string,
+  proyecto: string,
+  path_original: string
+): Promise<Chunk[]> {
+  const { simpleParser } = await import("mailparser");
+  const parsed = await simpleParser(buf);
+  const remitente =
+    parsed.from?.text ??
+    (Array.isArray(parsed.from) ? parsed.from.map((a) => (a as { text?: string }).text).join(", ") : "") ??
+    "";
+  const toField = parsed.to;
+  const destinatario = Array.isArray(toField)
+    ? toField.map((a) => (a as { text?: string }).text).join(", ")
+    : (toField as { text?: string } | undefined)?.text ?? "";
+  const ccField = parsed.cc;
+  const cc = Array.isArray(ccField)
+    ? ccField.map((a) => (a as { text?: string }).text).join(", ")
+    : (ccField as { text?: string } | undefined)?.text ?? "";
+  const asunto = parsed.subject ?? "";
+  const fecha = parsed.date?.toISOString() ?? "";
+  const hilo_id = (parsed.messageId ?? asunto).slice(0, 120);
+  const cuerpo = parsed.text || (parsed.html ? parsed.html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "") || "(sin cuerpo)";
+
+  const header = `De: ${remitente}\nPara: ${destinatario}\n${cc ? `Cc: ${cc}\n` : ""}Fecha: ${fecha}\nAsunto: ${asunto}\n---\n`;
+
+  const chunks: Chunk[] = [];
+  const fullText = header + cuerpo;
+  if (fullText.length <= CHUNK_SIZE * 1.5) {
+    chunks.push({
+      id: `${proyecto}__${archivo}__chunk_0`,
+      text: fullText,
+      metadata: {
+        archivo, proyecto, tipo: "email",
+        chunk_index: 0, pagina: 1, total_paginas: 1,
+        remitente, destinatario, asunto, fecha, hilo_id, path_original,
+      },
+    });
+  } else {
+    let i = 0, chunkIdx = 0;
+    while (i < cuerpo.length) {
+      const end = Math.min(i + CHUNK_SIZE, cuerpo.length);
+      chunks.push({
+        id: `${proyecto}__${archivo}__chunk_${chunkIdx}`,
+        text: header + cuerpo.slice(i, end),
+        metadata: {
+          archivo, proyecto, tipo: "email",
+          chunk_index: chunkIdx, char_start: i, char_end: end,
+          pagina: 1, total_paginas: 1,
+          remitente, destinatario, asunto, fecha, hilo_id, path_original,
+        },
+      });
+      chunkIdx++;
+      if (end >= cuerpo.length) break;
+      i += CHUNK_SIZE - OVERLAP;
+    }
+  }
+  return chunks;
+}
+
 
 async function extractXlsxChunks(
   buf: Buffer,
@@ -173,10 +236,11 @@ export async function POST(req: NextRequest) {
   const isPdf = file.type === "application/pdf" || name.endsWith(".pdf");
   const isDocx = file.type === DOCX_MIME || name.endsWith(".docx");
   const isXlsx = file.type === XLSX_MIME || name.endsWith(".xlsx") || name.endsWith(".xls");
+  const isEml = EML_MIMES.includes(file.type) || name.endsWith(".eml");
 
-  if (!isPdf && !isDocx && !isXlsx) {
+  if (!isPdf && !isDocx && !isXlsx && !isEml) {
     return NextResponse.json(
-      { error: `Formato no soportado: ${file.type || name}. Soportados: PDF, DOCX, XLSX.` },
+      { error: `Formato no soportado: ${file.type || name}. Soportados: PDF, DOCX, XLSX, EML.` },
       { status: 415 }
     );
   }
@@ -201,6 +265,21 @@ export async function POST(req: NextRequest) {
       const txt = await res.text();
       if (!res.ok) return NextResponse.json({ error: `n8n ${res.status}`, body: txt }, { status: 502 });
       return NextResponse.json({ ...JSON.parse(txt), archivo: file.name, proyecto, total_paginas });
+    }
+
+    if (isEml) {
+      const chunks = await extractEmlChunks(buf, file.name, proyecto, "");
+      if (!chunks.length) {
+        return NextResponse.json({ error: "Email vacio o no parseable." }, { status: 422 });
+      }
+      const res = await fetch(`${config.n8nUrl}/webhook/ingesta-texto`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chunks, archivo: file.name, proyecto, tipo: "email", total_paginas: 1 }),
+      });
+      const txt = await res.text();
+      if (!res.ok) return NextResponse.json({ error: `n8n ${res.status}`, body: txt }, { status: 502 });
+      return NextResponse.json({ ...JSON.parse(txt), archivo: file.name, proyecto });
     }
 
     if (isXlsx) {
