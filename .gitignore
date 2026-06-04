@@ -7,6 +7,7 @@
 # Datos del usuario (privados, local-first)
 data/documentos/*
 data/vectordb/*
+data/uso.jsonl
 !data/documentos/.gitkeep
 !data/vectordb/.gitkeep
 

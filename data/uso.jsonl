@@ -1,4 +1,0 @@
-{"ts":"2026-06-04T19:19:54.287Z","tipo":"consulta_contradicciones","modelo":"openai/gpt-4o-mini","proyecto":"restaurante","prompt_tokens":1180,"completion_tokens":10,"total_tokens":1190,"cost_usd":0.000183}
-{"ts":"2026-06-04T19:19:54.288Z","tipo":"chat","modelo":"anthropic/claude-4-sonnet-20250522","proyecto":"restaurante","prompt_tokens":3097,"completion_tokens":358,"total_tokens":3455,"cost_usd":0.014661}
-{"ts":"2026-06-04T19:20:02.182Z","tipo":"council_completitud","modelo":"anthropic/claude-sonnet-4","prompt_tokens":1446,"completion_tokens":336,"total_tokens":1782,"cost_usd":0.009378}
-{"ts":"2026-06-04T19:20:02.182Z","tipo":"council_contradicciones","modelo":"openai/gpt-4o-mini","prompt_tokens":1205,"completion_tokens":193,"total_tokens":1398,"cost_usd":0.00029655}
