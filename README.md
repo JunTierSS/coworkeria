@@ -108,6 +108,7 @@ También con Web UI: `localhost:3000` → arrastrar PDF/DOCX → preguntar en el
 | F2 | Procesamiento automático | ✅ chunking + embeddings (OpenAI) + store |
 | F3 | Chat sobre el conocimiento | ✅ Claude Sonnet 4 |
 | F4 | Búsqueda semántica | ✅ Chroma query con filtro por proyecto |
+| **F4+** | **Hierarchical RAG (2 niveles)** | ✅ Al ingerir cada archivo se genera un resumen + entidades + conceptos y se indexa en colección separada `coworkeria_indice`. Al consultar: **Nivel 1** busca top-10 archivos relevantes vía embeddings de resúmenes → **Nivel 2** busca chunks SOLO en esos archivos → Claude recibe mapa de archivos relevantes + chunks específicos. Soluciona el problema de top-K limitado para preguntas amplias sobre codebases grandes. |
 | F5 | Citas exactas | ✅ `[archivo, pag. N]` inline (página REAL para PDFs vía PyMuPDF/pdf-parse) |
 | F6 | Modo conservador | ✅ "no encontré eso en tus fuentes" |
 | F7 | Modo crítico | ✅ "Observación crítica" detecta debilidades |
