@@ -23,14 +23,36 @@ type TimelineResp = {
   mensaje?: string;
 };
 
-// Detecta cambios agrupando por "aspecto" (primera palabra significativa del valor)
+// Agrupa por mes (YYYY-MM)
+function agruparPorMes(eventos: Evento[]): { mes: string; label: string; eventos: Evento[] }[] {
+  const grupos = new Map<string, Evento[]>();
+  for (const e of eventos) {
+    const mes = (e.fecha_iso || "").slice(0, 7) || "sin-fecha";
+    if (!grupos.has(mes)) grupos.set(mes, []);
+    grupos.get(mes)!.push(e);
+  }
+  const meses = Array.from(grupos.keys()).sort();
+  const formatter = new Intl.DateTimeFormat("es-AR", { year: "numeric", month: "long" });
+  return meses.map((mes) => {
+    let label = mes;
+    if (mes !== "sin-fecha" && mes.length === 7) {
+      try {
+        const d = new Date(mes + "-01T12:00:00");
+        label = formatter.format(d);
+      } catch {}
+    } else if (mes === "sin-fecha") {
+      label = "Sin fecha";
+    }
+    return { mes, label, eventos: grupos.get(mes)! };
+  });
+}
+
+// Detecta cambios agrupando por aspecto (primera palabra significativa del valor)
 function detectarCambios(eventos: Evento[]): Map<string, Evento[]> {
   const grupos = new Map<string, Evento[]>();
   for (const e of eventos) {
     const raw = String(e.valor || "");
-    // Toma la primera palabra (antes de ':' o espacio), normaliza
     let aspecto = raw.split(/[\s:]/)[0].trim().toLowerCase();
-    // Si la "aspecto" es genérica (Stack, Tipo, etc), agarra hasta 2 palabras
     if (aspecto.length < 4) {
       aspecto = raw.split(/[:]/)[0].trim().toLowerCase().slice(0, 30);
     }
@@ -39,6 +61,26 @@ function detectarCambios(eventos: Evento[]): Map<string, Evento[]> {
     grupos.get(aspecto)!.push(e);
   }
   return grupos;
+}
+
+const COLORS_TIPO_ARCHIVO: Record<string, string> = {
+  pdf: "#ef4444",
+  email: "#3b82f6",
+  xlsx: "#10b981",
+  docx: "#8b5cf6",
+  codigo: "#f59e0b",
+  imagen: "#ec4899",
+  texto: "#6366f1",
+};
+function colorPorArchivo(archivo: string): string {
+  const ext = archivo.split(".").pop()?.toLowerCase() || "";
+  if (["pdf"].includes(ext)) return COLORS_TIPO_ARCHIVO.pdf;
+  if (["eml"].includes(ext)) return COLORS_TIPO_ARCHIVO.email;
+  if (["xlsx", "xls"].includes(ext)) return COLORS_TIPO_ARCHIVO.xlsx;
+  if (["docx"].includes(ext)) return COLORS_TIPO_ARCHIVO.docx;
+  if (["py", "js", "ts", "sql", "ipynb"].includes(ext)) return COLORS_TIPO_ARCHIVO.codigo;
+  if (["png", "jpg", "jpeg", "gif"].includes(ext)) return COLORS_TIPO_ARCHIVO.imagen;
+  return COLORS_TIPO_ARCHIVO.texto;
 }
 
 export default function TimelinePage() {
@@ -70,8 +112,8 @@ export default function TimelinePage() {
   };
 
   const eventos = data?.eventos || [];
+  const porMes = agruparPorMes(eventos);
   const grupos = detectarCambios(eventos);
-  // Aspectos que tienen cambios (>1 evento con valores distintos)
   const aspectosConCambio = new Set<string>();
   grupos.forEach((evs, asp) => {
     if (evs.length > 1) {
@@ -82,18 +124,16 @@ export default function TimelinePage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-4xl mx-auto p-4 sm:p-8">
-        <header className="mb-6 sm:mb-8 flex items-start justify-between gap-3 flex-wrap">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-              <History className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
-              Timeline temporal
-            </h1>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-              Cómo evolucionó un tema en{" "}
-              <span className="font-medium text-zinc-900 dark:text-zinc-100">{proyecto}</span>
-            </p>
-          </div>
+      <div className="max-w-5xl mx-auto p-4 sm:p-8">
+        <header className="mb-6 sm:mb-8">
+          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+            <History className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
+            Timeline temporal
+          </h1>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+            Cómo evolucionó un tema en{" "}
+            <span className="font-medium text-zinc-900 dark:text-zinc-100">{proyecto}</span>
+          </p>
         </header>
 
         {/* Input topic */}
@@ -107,7 +147,7 @@ export default function TimelinePage() {
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && generar()}
-              placeholder="ej: presupuesto del proyecto X, fechas de deadline, líder del equipo..."
+              placeholder='ej: "todo el proyecto restaurante" · "presupuesto y deadline" · "decisiones clave"'
               className="flex-1 min-w-[200px] px-3 py-2 text-sm rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
             <button
@@ -120,7 +160,7 @@ export default function TimelinePage() {
             </button>
           </div>
           <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-2">
-            Buscamos eventos con fecha asociados al tema. Funciona mejor con correos, documentos con fecha de creación, o pasajes con fechas explícitas.
+            Buscamos eventos con fecha del tema. Para proyectos grandes podés pedir &quot;todos los hitos&quot; para que extraiga el máximo.
           </p>
         </div>
 
@@ -139,15 +179,17 @@ export default function TimelinePage() {
 
         {data && !loading && (
           <div className="mt-6 space-y-4">
-            {/* Resumen de evolucion */}
             {data.resumen_evolucion && (
               <div className="bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-950/40 dark:to-purple-950/40 border border-indigo-200 dark:border-indigo-900 rounded-lg p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700 dark:text-indigo-300 mb-1">
                   Resumen de evolución
                 </p>
-                <p className="text-sm text-zinc-800 dark:text-zinc-200">{data.resumen_evolucion}</p>
+                <p className="text-sm text-zinc-800 dark:text-zinc-200 leading-relaxed">
+                  {data.resumen_evolucion}
+                </p>
                 <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-2">
-                  Analizados {data.total_chunks_analizados ?? "?"} chunks · {eventos.length} eventos extraídos
+                  Analizados {data.total_chunks_analizados ?? "?"} chunks · {eventos.length} eventos
+                  extraídos · {porMes.length} mes(es)
                 </p>
               </div>
             )}
@@ -162,7 +204,7 @@ export default function TimelinePage() {
             {aspectosConCambio.size > 0 && (
               <div className="bg-orange-50 dark:bg-orange-950/30 border border-orange-200 dark:border-orange-900 rounded-lg p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-orange-700 dark:text-orange-300 mb-3">
-                  Cambios detectados
+                  Cambios detectados a lo largo del tiempo
                 </p>
                 <div className="space-y-2">
                   {Array.from(aspectosConCambio).map((asp) => {
@@ -196,53 +238,84 @@ export default function TimelinePage() {
               </div>
             )}
 
-            {/* Timeline vertical */}
-            {eventos.length > 0 && (
+            {/* Timeline agrupado por mes */}
+            {porMes.length > 0 && (
               <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg p-4 sm:p-6">
-                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-400 mb-4 flex items-center gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-400 mb-5 flex items-center gap-2">
                   <Clock className="w-3.5 h-3.5" />
-                  Línea cronológica · {eventos.length} eventos
+                  Línea cronológica · {eventos.length} eventos en {porMes.length} mes(es)
                 </p>
-                <div className="relative pl-6 sm:pl-8">
-                  {/* Línea vertical */}
-                  <div className="absolute left-[7px] sm:left-[11px] top-2 bottom-2 w-px bg-zinc-200 dark:bg-zinc-700" />
-                  {eventos.map((e, i) => {
-                    const aspecto = String(e.valor || "").split(":")[0].trim().toLowerCase();
-                    const enCambio = aspectosConCambio.has(aspecto);
-                    return (
-                      <div key={i} className="relative pb-5 last:pb-0">
-                        {/* Dot */}
-                        <div
-                          className={clsx(
-                            "absolute -left-6 sm:-left-8 top-1 w-3 sm:w-[15px] h-3 sm:h-[15px] rounded-full ring-2",
-                            enCambio
-                              ? "bg-orange-500 ring-orange-200 dark:ring-orange-900"
-                              : "bg-indigo-500 ring-indigo-200 dark:ring-indigo-900"
-                          )}
-                        />
-                        <div className="flex items-center gap-2 mb-1 flex-wrap">
-                          <span className="inline-flex items-center gap-1 text-[10px] font-mono font-medium text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded">
-                            <Calendar className="w-3 h-3" />
-                            {e.fecha}
-                          </span>
-                          {enCambio && (
-                            <span className="text-[9px] font-semibold uppercase tracking-wide text-orange-700 dark:text-orange-300 bg-orange-100 dark:bg-orange-900/40 px-1.5 py-0.5 rounded">
-                              cambio
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{e.valor}</p>
-                        {e.descripcion && (
-                          <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">{e.descripcion}</p>
-                        )}
-                        <p className="text-[10px] text-zinc-500 dark:text-zinc-500 mt-1 flex items-center gap-1">
-                          <FileText className="w-3 h-3" />
-                          {e.fuente_archivo}
-                          {e.fuente_pagina && <span>· pag {e.fuente_pagina}</span>}
-                        </p>
+
+                <div className="space-y-6">
+                  {porMes.map((grupoMes) => (
+                    <div key={grupoMes.mes}>
+                      {/* Header del mes */}
+                      <div className="flex items-center gap-3 mb-3">
+                        <div className="w-3 h-3 rounded-full bg-indigo-500 ring-4 ring-indigo-100 dark:ring-indigo-900/30" />
+                        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 capitalize">
+                          {grupoMes.label}
+                        </h3>
+                        <span className="text-[10px] text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded font-mono">
+                          {grupoMes.eventos.length} evento{grupoMes.eventos.length === 1 ? "" : "s"}
+                        </span>
                       </div>
-                    );
-                  })}
+
+                      {/* Eventos del mes */}
+                      <div className="ml-1.5 border-l-2 border-zinc-200 dark:border-zinc-700 pl-5 space-y-3">
+                        {grupoMes.eventos.map((e, i) => {
+                          const aspecto = String(e.valor || "").split(/[\s:]/)[0].trim().toLowerCase();
+                          const enCambio = aspectosConCambio.has(aspecto);
+                          const colorArchivo = colorPorArchivo(e.fuente_archivo);
+                          return (
+                            <div key={i} className="relative">
+                              {/* Dot */}
+                              <div
+                                className={clsx(
+                                  "absolute -left-[26px] top-1 w-3 h-3 rounded-full ring-2",
+                                  enCambio
+                                    ? "bg-orange-500 ring-orange-100 dark:ring-orange-900/40"
+                                    : "bg-zinc-400 dark:bg-zinc-500 ring-zinc-100 dark:ring-zinc-700"
+                                )}
+                              />
+
+                              <div className="bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 rounded-lg p-3 hover:border-zinc-300 dark:hover:border-zinc-600 transition">
+                                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-mono font-medium text-zinc-600 dark:text-zinc-400 bg-white dark:bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-200 dark:border-zinc-700">
+                                    <Calendar className="w-3 h-3" />
+                                    {e.fecha}
+                                  </span>
+                                  {enCambio && (
+                                    <span className="text-[9px] font-semibold uppercase tracking-wide text-orange-700 dark:text-orange-300 bg-orange-100 dark:bg-orange-900/40 px-1.5 py-0.5 rounded">
+                                      cambio
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                                  • {e.valor}
+                                </p>
+                                {e.descripcion && (
+                                  <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 leading-relaxed">
+                                    {e.descripcion}
+                                  </p>
+                                )}
+                                <div className="flex items-center gap-1.5 mt-1.5">
+                                  <span
+                                    className="w-1.5 h-1.5 rounded-full shrink-0"
+                                    style={{ background: colorArchivo }}
+                                  />
+                                  <FileText className="w-3 h-3 text-zinc-400 dark:text-zinc-500" />
+                                  <span className="text-[10px] text-zinc-500 dark:text-zinc-500">
+                                    {e.fuente_archivo}
+                                    {e.fuente_pagina && ` · pág ${e.fuente_pagina}`}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
