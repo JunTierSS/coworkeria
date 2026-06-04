@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FileText, MessageSquare, Brain, FolderOpen, Plus, Moon, Sun, X } from "lucide-react";
+import { FileText, MessageSquare, Brain, FolderOpen, Plus, Moon, Sun, X, History } from "lucide-react";
 import { useProject } from "./ProjectProvider";
 import { useTheme } from "./ThemeProvider";
 import { useMobileMenu } from "./MobileMenu";
@@ -19,6 +19,7 @@ export function Sidebar() {
   const items = [
     { href: "/", label: "Documentos", icon: FileText },
     { href: "/chat", label: "Chat", icon: MessageSquare },
+    { href: "/timeline", label: "Timeline", icon: History },
   ];
 
   const closeOnNav = () => setOpen(false);

@@ -28,6 +28,7 @@ CoWorkerIA resuelve ese dolor con tres ingredientes:
 | **Chat con citas inline** | ![Chat](docs/screenshots/02-chat-light.png) |
 | **Dark mode** | ![Dark](docs/screenshots/03-documentos-dark.png) |
 | **Responsive móvil** | <img src="docs/screenshots/05-chat-mobile.png" width="320" alt="Mobile" /> |
+| **Timeline temporal (Fase 3)** | ![Timeline](docs/screenshots/06-timeline-light.png) |
 
 ## Demo CLI
 
@@ -110,6 +111,7 @@ También con Web UI: `localhost:3000` → arrastrar PDF/DOCX → preguntar en el
 | F7 | Modo crítico | ✅ "Observación crítica" detecta debilidades |
 | **F7+** | **LLM Council** (3 jueces) | ✅ Tras cada respuesta, un panel de **Claude + GPT-4o + Llama 3.3** valida fundamentación en paralelo. Badge con veredicto + problemas detectados. |
 | **F10** *(Fase 3)* | **Detección de contradicciones** | ✅ Cuando los chunks recuperados se contradicen entre sí (ej: presupuesto $80k en PDF del 02/04 vs $125k en email del 04/04), un detector LLM identifica las contradicciones, las pasa a Claude para que las flagué, y se muestran en un panel separado en la UI con severidad alta/media/baja. **Decisión queda al usuario** (alineado con principio del PRD). |
+| **F11** *(Fase 3)* | **Timeline temporal** | ✅ Nueva vista `/timeline`: el usuario ingresa un tema, el sistema retrieve top-20 chunks, Claude extrae eventos datables (`fecha + valor + fuente`), se ordenan cronológicamente y se renderizan como línea de tiempo vertical. **Cambios destacados** muestran cómo evolucionó cada aspecto (presupuesto $80k → $125k, líder Maria → Andres, etc). |
 | F8 | Gestión de documentos | ✅ ls + rm + UI con drag&drop |
 | F9 | Concepto de proyecto/tema | ✅ selector en sidebar, `--proyecto` en CLI |
 

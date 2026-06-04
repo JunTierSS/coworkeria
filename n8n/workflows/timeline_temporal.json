@@ -1,0 +1,95 @@
+{
+  "name": "Timeline Temporal",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "timeline",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "id": "wh-t-1",
+      "name": "Webhook Timeline"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/embeddings",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OPENROUTER_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ input: [$json.body.topic], model: $env.EMBED_MODEL || 'openai/text-embedding-3-small' }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [200, 0],
+      "id": "http-emb-t-1",
+      "name": "Embed topic"
+    },
+    {
+      "parameters": {
+        "jsCode": "const embRes = $input.first().json;\nconst body = $('Webhook Timeline').first().json.body || {};\nconst topic = body.topic || '';\nconst proyecto = body.proyecto || null;\nconst n_results = body.n_results || 20; // mas chunks que en consulta normal\n\nif (!embRes.data || !embRes.data[0]) {\n  throw new Error(`Embedding response invalid`);\n}\n\nconst payload = {\n  query_embeddings: [embRes.data[0].embedding],\n  n_results,\n  include: ['documents', 'metadatas', 'distances']\n};\nif (proyecto) payload.where = { proyecto };\n\nreturn [{ json: { topic, proyecto, chroma_payload: payload } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 0],
+      "id": "build-t-1",
+      "name": "Build Chroma query"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:8000/api/v2/tenants/default_tenant/databases/default_database/collections/{{ $env.CHROMA_COLLECTION_ID }}/query",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.chroma_payload) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [600, 0],
+      "id": "http-chroma-t-1",
+      "name": "Query Chroma"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Toma los chunks recuperados + le pide a Claude que extraiga EVENTOS con fecha sobre el topic.\nconst chromaRes = $input.first().json;\nconst body = $('Webhook Timeline').first().json.body || {};\nconst topic = body.topic || '';\nconst proyecto = body.proyecto || null;\n\nconst ids = (chromaRes.ids && chromaRes.ids[0]) || [];\nconst docs = (chromaRes.documents && chromaRes.documents[0]) || [];\nconst metas = (chromaRes.metadatas && chromaRes.metadatas[0]) || [];\n\nif (ids.length === 0) {\n  return [{ json: { topic, proyecto, eventos: [], mensaje: 'No encontre informacion sobre ese tema en tus fuentes.' } }];\n}\n\n// Construir contexto con TODA la metadata temporal disponible\nconst contexto = ids.map((id, i) => {\n  const m = metas[i] || {};\n  const fechaMeta = m.fecha || '';  // emails ya tienen fecha del header\n  const archivoInfo = `archivo: ${m.archivo}${m.pagina ? `, pag ${m.pagina}` : ''}${m.hoja ? `, hoja ${m.hoja}` : ''}`;\n  const fechaInfo = fechaMeta ? `, fecha del documento: ${fechaMeta}` : '';\n  return `[${i+1}] (${archivoInfo}${fechaInfo})\\n${docs[i]}`;\n}).join('\\n\\n---\\n\\n');\n\nconst systemPrompt = `Sos un extractor temporal de eventos para CoWorkerIA.\nEl usuario quiere ver como evoluciono un tema/concepto a traves del tiempo segun sus documentos.\nTe paso los pasajes recuperados con su metadata (archivo, fecha del documento si la hay).\n\nTu tarea: extraer EVENTOS DATABLES sobre el tema. Un evento es una afirmacion concreta con una fecha asociada (sea explicita en el texto o inferida de la fecha del documento).\n\nFormato exacto JSON:\n{\n  \"eventos\": [\n    {\n      \"fecha\": \"YYYY-MM-DD o YYYY-MM o YYYY o descripcion temporal si no hay fecha exacta (ej 'Q1 2026')\",\n      \"fecha_iso\": \"YYYY-MM-DD para ordenar (aproxima si solo hay mes/año, ej '2026-01-01')\",\n      \"valor\": \"el dato o estado especifico (ej: 'Presupuesto USD 80.000', 'Lider tecnico: Maria Lopez', 'Stack: AWS')\",\n      \"descripcion\": \"contexto breve de que paso/se afirmo\",\n      \"fuente_pasaje\": numero (1-based) del pasaje origen,\n      \"fuente_archivo\": \"nombre del archivo\",\n      \"fuente_pagina\": numero o null\n    }\n  ],\n  \"resumen_evolucion\": \"1-2 frases describiendo como evoluciono el tema en total\"\n}\n\nREGLAS:\n- Solo eventos con fecha (explicita o inferida de la metadata).\n- NO inventes fechas. Si un pasaje no tiene fecha y la metadata tampoco, no incluyas evento.\n- Si dos eventos en la misma fecha dicen lo mismo, deduplicar.\n- Si dos eventos en fechas distintas afirman valores distintos sobre el mismo aspecto, INCLUIR AMBOS (eso es la evolucion).\n- Maximo 20 eventos.`;\n\nconst userPrompt = `TEMA A RASTREAR: ${topic}\\n\\nPASAJES DISPONIBLES:\\n\\n${contexto}\\n\\nExtrae eventos datables sobre el tema.`;\n\nlet eventos = [];\nlet resumen = '';\ntry {\n  const data = await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'https://openrouter.ai/api/v1/chat/completions',\n    headers: {\n      'Authorization': `Bearer ${$env.OPENROUTER_API_KEY}`,\n      'Content-Type': 'application/json',\n      'HTTP-Referer': 'http://localhost',\n      'X-Title': 'CoWorkerIA Timeline',\n    },\n    body: {\n      model: $env.LLM_MODEL || 'anthropic/claude-sonnet-4',\n      messages: [\n        { role: 'system', content: systemPrompt },\n        { role: 'user', content: userPrompt },\n      ],\n      max_tokens: 2000,\n      temperature: 0,\n    },\n    json: true,\n  });\n  const raw = data.choices?.[0]?.message?.content || '{}';\n  let parsed;\n  try { parsed = JSON.parse(raw); }\n  catch {\n    const cleaned = raw.replace(/^```(?:json)?\\s*/gm, '').replace(/```\\s*$/gm, '').trim();\n    try { parsed = JSON.parse(cleaned); }\n    catch {\n      let depth = 0, start = -1, found = null;\n      for (let i = 0; i < cleaned.length; i++) {\n        if (cleaned[i] === '{') { if (depth === 0) start = i; depth++; }\n        else if (cleaned[i] === '}') { depth--; if (depth === 0 && start !== -1) { found = cleaned.slice(start, i + 1); break; } }\n      }\n      parsed = found ? (() => { try { return JSON.parse(found); } catch { return { eventos: [] }; } })() : { eventos: [] };\n    }\n  }\n  eventos = Array.isArray(parsed.eventos) ? parsed.eventos : [];\n  resumen = parsed.resumen_evolucion || '';\n} catch (e) {\n  return [{ json: { topic, proyecto, eventos: [], mensaje: `Error extrayendo eventos: ${e?.message}` } }];\n}\n\n// Ordenar por fecha_iso\neventos.sort((a, b) => String(a.fecha_iso || '').localeCompare(String(b.fecha_iso || '')));\n\n// Detectar cambios: agrupar eventos por aspecto similar (mismo prefijo de 'valor')\nconst cambios = [];\nfor (let i = 1; i < eventos.length; i++) {\n  const prev = eventos[i-1];\n  const curr = eventos[i];\n  // Mismo prefijo de valor (ej 'Presupuesto' vs 'Presupuesto') pero distinto valor completo\n  const prefPrev = String(prev.valor || '').split(':')[0].trim().toLowerCase();\n  const prefCurr = String(curr.valor || '').split(':')[0].trim().toLowerCase();\n  if (prefPrev && prefPrev === prefCurr && prev.valor !== curr.valor) {\n    cambios.push({\n      aspecto: prefPrev,\n      de: prev.valor,\n      a: curr.valor,\n      fecha_de: prev.fecha,\n      fecha_a: curr.fecha,\n      indice_evento_anterior: i - 1,\n      indice_evento_nuevo: i,\n    });\n  }\n}\n\nreturn [{ json: { topic, proyecto, eventos, cambios, resumen_evolucion: resumen, total_chunks_analizados: ids.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 0],
+      "id": "extract-events-1",
+      "name": "Extraer eventos temporales"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1000, 0],
+      "id": "resp-t-1",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook Timeline": { "main": [[{"node":"Embed topic","type":"main","index":0}]] },
+    "Embed topic": { "main": [[{"node":"Build Chroma query","type":"main","index":0}]] },
+    "Build Chroma query": { "main": [[{"node":"Query Chroma","type":"main","index":0}]] },
+    "Query Chroma": { "main": [[{"node":"Extraer eventos temporales","type":"main","index":0}]] },
+    "Extraer eventos temporales": { "main": [[{"node":"Respond to Webhook","type":"main","index":0}]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
